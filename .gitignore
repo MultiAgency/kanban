@@ -1,0 +1,13 @@
+.claude/
+node_modules/
+.env
+.env.local
+.DS_Store
+*.log
+coverage/
+.vscode/
+.idea/
+build/
+
+# bulk-push dry-run artifact (per-execution scratch mapping)
+roadmap/.id-to-number.dry-run.json

@@ -1,0 +1,41 @@
+name: Meta
+description: A tracking or umbrella issue — milestone, governance, decision log, or roll-up of related work.
+title: "[Meta]: "
+labels: ["ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Meta issues coordinate work that doesn't fit a single Task. They tend to stay open longer and accumulate cross-references rather than getting claimed and closed. Don't add `agent-eligible` unless an agent should actively manage the umbrella.
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: Purpose
+      description: What this meta issue tracks. Why a single Task isn't enough.
+      placeholder: A sentence or two.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What's in, what's out. The boundary that keeps this issue from sprawling.
+    validations:
+      required: true
+
+  - type: textarea
+    id: children
+    attributes:
+      label: Tracked work
+      description: |
+        Sub-issues (use `- [ ] #N` checklist syntax). This list is descriptive — the promote-dependencies workflow only acts on issues whose body declares them as parents, not on this list.
+      value: |
+        - [ ] #
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Status / decisions
+      description: Running log of decisions, blockers, status updates. Append-only.

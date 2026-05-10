@@ -1,0 +1,19 @@
+name: Promote dependencies
+
+# Dual-purpose workflow: runs natively on this repo's issue-close events,
+# and is callable as a reusable workflow from downstream forks via
+# `uses: MultiAgency/kanban/.github/workflows/promote-dependencies.yml@v0`.
+
+on:
+  workflow_call:
+  issues:
+    types: [closed]
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: MultiAgency/kanban@v0

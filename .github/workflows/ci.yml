@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm run format:check
+
+      - run: npm test
+
+      - name: Check spec cross-references
+        run: bash scripts/check-spec-refs.sh
+
+      - name: Validate roadmap YAML
+        run: bash scripts/validate-roadmap.sh
+
+      - run: npm run build
+
+      - name: Verify dist/ is in sync with src/
+        run: git diff --exit-code dist/

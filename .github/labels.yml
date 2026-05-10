@@ -1,0 +1,49 @@
+# Canonical labels for the MultiAgency/kanban convention.
+# Names are hard-coded in the Action and the kanban-worker SKILL.md;
+# renaming is an "Ask first" change. See SPEC.md §Canonical labels.
+#
+# Sync via crazy-max/ghaction-github-labeler v5+ (preferred) or `gh label
+# create` from a script. Schema: name + color (no `#` prefix) + description.
+
+# --- Status (mutually exclusive) ---
+- name: ready
+  color: "0e8a16"
+  description: open for claim
+
+- name: in-progress
+  color: "fbca04"
+  description: actively being worked
+
+- name: blocked
+  color: "b60205"
+  description: waiting on input or upstream
+
+# --- Eligibility ---
+- name: agent-eligible
+  color: "006b75"
+  description: agents may pick up
+
+- name: human-only
+  color: "5319e7"
+  description: hard veto; agents skip even if agent-eligible is also present
+
+# --- Skills (project-declared via labels) ---
+- name: skill:research
+  color: "c5def5"
+  description: needs research skill
+
+- name: skill:writing
+  color: "bfd4f2"
+  description: needs writing skill
+
+- name: skill:translation
+  color: "bfdadc"
+  description: needs translation skill
+
+- name: skill:code
+  color: "c2e0c6"
+  description: needs code skill
+
+- name: skill:review
+  color: "d4c5f9"
+  description: needs review skill

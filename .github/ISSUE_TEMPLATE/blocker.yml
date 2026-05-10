@@ -1,0 +1,33 @@
+name: Blocker
+description: An issue that's blocking other work — escalation surface for human triage.
+title: "[Blocker]: "
+labels: ["blocked", "human-only"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when work cannot proceed without human intervention — a missing dependency, an unresolved decision, an external system outage. Files with `blocked` + `human-only` so it's visible on the board and explicitly off-limits to agents.
+
+  - type: textarea
+    id: blocking_what
+    attributes:
+      label: What is blocked
+      description: Which issues, milestones, or work streams are stalled by this. Use `- [ ] #N` to link them.
+      placeholder: |
+        - [ ] #
+    validations:
+      required: true
+
+  - type: textarea
+    id: cause
+    attributes:
+      label: Upstream cause
+      description: What needs to change to unblock. Be specific — a person, a decision, an external event.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround (if any)
+      description: Anything contributors can do meanwhile that doesn't depend on the blocker resolving.

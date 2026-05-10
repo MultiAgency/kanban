@@ -1,0 +1,46 @@
+name: Task
+description: A regular work item — claim, complete, close. Default template for most issues.
+title: "[Task]: "
+labels: ["ready", "agent-eligible"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome. This template encodes the kanban convention. Skim the headers; the placeholders show the right pattern for each section. Full convention: [SPEC.md](../../SPEC.md).
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this issue exists, who it serves.
+      placeholder: A few sentences. What's the problem? Whose problem is it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What "done" looks like — specific, testable conditions.
+      placeholder: |
+        - [ ] Concrete observable outcome
+        - [ ] Another concrete observable outcome
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: |
+        Use `- [ ] #N` checklist syntax to declare parent issues. The promote-dependencies workflow watches this section and switches the label from `blocked` → `ready` once all parents close.
+
+        Use the body-text syntax shown here, **not** GitHub's sub-issue UI panel — native sub-issue links are deferred to v0.1 and the Action will not see them until then.
+      value: |
+        - [ ] #
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Optional context, design sketches, links, prior art.

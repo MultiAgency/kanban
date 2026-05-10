@@ -1,0 +1,33 @@
+{
+  "name": "@multiagency/kanban",
+  "version": "0.0.0",
+  "description": "A coordination convention for IronClaw agents working alongside human contributors on GitHub Issues. Ships as a SKILL.md, a template repository, and a GitHub Action.",
+  "license": "(MIT OR Apache-2.0)",
+  "private": false,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "esbuild src/action/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "typecheck": "tsc --noEmit",
+    "push-roadmap": "node scripts/push-roadmap.mjs"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@actions/github": "^9.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^6.0.0",
+    "vitest": "^4.0.0",
+    "yaml": "^2.8.4"
+  }
+}

@@ -1,0 +1,1786 @@
+# roadmap/v1-issues.yaml
+#
+# v1 application roadmap — 45 entries across 6 tracks.
+# Authored during planning sessions for MultiAgency/kanban v0.
+#
+# Schema per entry:
+#   id            letter-prefix unique within the file (A1, D6, API2a, etc.)
+#   track         one of: architecture | data-model | api | integration | ui | research-docs
+#   title         the issue title
+#   labels        array of label slugs from .github/labels.yml
+#   depends_on    array of letter-prefix ids that must close before this is ready
+#   body          markdown issue body
+#
+# Bulk-push (T5.4) responsibilities:
+#   1. Pass 1: gh issue create per entry, capture letter-prefix → #N mapping.
+#   2. Pass 2: replace every letter-prefix occurrence in body text and
+#      depends_on with its mapped #N reference. Single regex pass over body
+#      handles both depends_on metadata AND in-body prose references
+#      (e.g. "INT5's scope", "API4 will implement").
+#
+# Layer-0 (ready) at authoring: 21 entries total =
+#   20 ready+agent-eligible (one per major track L0 plus several research/docs backups,
+#     plus A5 added post-authoring as a pre-resolved bundler ADR)
+#   + 1 ready+human-only (RD1b, perma-deferred until v0 has deployed users)
+
+# ============================================================
+# Architecture track (5 entries)
+# ============================================================
+
+- id: A1
+  track: architecture
+  title: "ADR: v1 web framework (Hono)"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Decision pre-resolved: **v1's web framework is Hono.** This issue
+    writes the ADR documenting the choice; it does not re-evaluate.
+
+    Evaluate Hono against Fastify and Express on the criteria below so
+    the rationale is honest and the rejected-alternatives section is
+    well-grounded:
+
+    - TypeScript-native types and inference
+    - OpenAPI generation support
+    - Minimal runtime dependency footprint
+    - License compatibility with dual MIT/Apache-2.0
+    - Ecosystem maturity
+    - Self-host friendliness
+
+    **Output:** `docs/adr/0001-web-framework.md` containing:
+    - Hono as the chosen framework with rationale
+    - Fastify and Express as rejected alternatives, one-paragraph
+      rationale each
+    - A criteria-by-criteria comparison table
+
+    **Downstream effect:** API3's "If A1 chose Hono → (b) via
+    `@hono/zod-openapi` is the strong default" branch is now active.
+    A1 does not pre-decide API3; the agent claiming API3 may treat
+    the Hono lock as input.
+
+- id: A2
+  track: architecture
+  title: "ADR: v1 repo placement"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Decide where v1 application source lives. Compare:
+
+    **(a) This repo gains a `v1/` directory.** Single repo for v0 convention,
+    Action, and v1 app; shared utilities like `parseHandoff` import via
+    relative paths. *Hidden cost:* this repo is a GitHub template; every
+    downstream fork inherits the v1 source whether they want it or not.
+    Forks that want pure-convention adoption have to delete `v1/` after
+    forking.
+
+    **(b) New repo `MultiAgency/kanban-app`.** Clean separation;
+    `parseHandoff` published as an npm package consumed by both repos so
+    neither owns the other's release cadence. *Net benefit:* keeps the
+    template repo clean for forking; v1 app source isn't carried by users
+    who only want the convention.
+
+    **(c) Monorepo split with workspaces.** One umbrella repo containing
+    v0 template, v1 app, and shared utilities as separate workspaces; clean
+    import paths without coupling release cadences. *Trade-off:* cleanest
+    import paths but workspace tooling (npm workspaces, pnpm, or similar)
+    is not part of v0's Tech Stack — adopting it would expand the v0
+    build surface to support v1's needs, violating v0's "cheapest
+    validation path" principle.
+
+    Constraints:
+    - `parseHandoff` and other shared utilities need a clean import path
+    - The v0 template repo must stay clean for forking
+    - v0 and v1 may release on different cadences
+
+    **Output:** `docs/adr/0002-repo-placement.md` with the chosen option,
+    a one-paragraph rationale per rejected option, and a migration sketch
+    if the chosen option requires moving away from the current single-repo
+    state.
+
+- id: A3
+  track: architecture
+  title: "ADR: web/worker process model"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [A1]
+  body: |
+    Specify how the single Docker image runs as either a web server or a
+    worker process.
+
+    Cover:
+
+    - **Entry commands per role.** How `docker run <image> web` vs
+      `docker run <image> worker` dispatch to different process types from
+      the same image.
+    - **When a deployment needs the worker.** Cron-pull mode (sync-mode
+      projects whose installation can't expose public webhooks); async
+      job-queue drain (a small job table drained by the worker process
+      with at-least-once semantics; no framework dependency).
+    - **When web-only suffices.** Pure-app projects with no GitHub-sync
+      cron and a low-volume job table that can drain inline.
+    - **Healthcheck conventions.** `/healthz` endpoint shape; what each
+      process role reports as healthy vs degraded.
+    - **Graceful shutdown.** SIGTERM handling, in-flight request draining,
+      job-table claim release on worker shutdown.
+    - **At-least-once retry semantics for the job table.** Retry budget,
+      poison-pill detection, dead-letter handling.
+
+    Depends on A1's framework choice — healthcheck integration and
+    middleware shape differ across Hono / Fastify / Express.
+
+    **Output:** `docs/adr/0003-web-worker-model.md`
+
+- id: A4
+  track: architecture
+  title: "ADR: observability stack"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Pick logging / metrics / tracing for v1.
+
+    - **Logging.** pino vs winston vs native `console`. Default lean:
+      pino unless compelling reason otherwise (structured JSON output by
+      default, lowest-overhead, broad ecosystem).
+    - **Metrics.** Prometheus `/metrics` endpoint, none, or custom.
+      Constrain to options that work for self-hosted deployments without
+      external service dependencies.
+    - **Tracing.** OpenTelemetry-instrumented or deferred to v1.5. If
+      included in v1, must remain optional (no mandatory exporter;
+      default to a no-op exporter).
+
+    Hard constraint: must work for self-hosted deployments with zero
+    external service dependencies. No mandatory Datadog / Sentry /
+    Honeycomb / similar.
+
+    **Recommendation:** defer tracing to v1.5 unless the agent's research
+    surfaces a specific reason v1 needs it (e.g., distributed-system
+    debugging that prints/logs can't handle). Default disposition:
+    deferred. Logging is sufficient for v1's operational needs at
+    single-tenant scale; tracing complexity earns its place when v1
+    deployments hit multi-tenant + multi-process scale where logs become
+    harder to correlate.
+
+    **Output:** `docs/adr/0004-observability.md`
+
+- id: A5
+  track: architecture
+  title: "ADR: v1 UI bundler (rsbuild)"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Decision pre-resolved: **v1's UI bundler is rsbuild.** This issue
+    writes the ADR documenting the choice; it does not re-evaluate.
+
+    Evaluate rsbuild against the alternatives below for an honest
+    rationale and well-grounded rejected-alternatives section:
+
+    - rsbuild (Rspack-based; fast HMR; production-grade Module
+      Federation support if v1 ever needs runtime composition;
+      aligns with the `nearbuilders/everything-dev` reference
+      architecture cited at decision time).
+    - Vite (mature, fast HMR, Rollup-based prod builds; broad
+      ecosystem; the most natural alternative).
+    - Webpack (incumbent; mature; slower; rsbuild's predecessor in
+      spirit).
+
+    **Out of scope:** the v0 GitHub Action keeps esbuild. Different
+    problem (single-file CJS Node 24 bundle for the Action runtime —
+    byte-stable target). Do not propose unifying v0 and v1 on a
+    single bundler; the constraints differ and esbuild is the right
+    fit for the v0 Action's surface.
+
+    **Output:** `docs/adr/0005-ui-bundler.md` containing:
+    - rsbuild as the chosen UI bundler with rationale
+    - Two rejected alternatives with one-paragraph rationale each
+    - A criteria-by-criteria comparison table
+    - One-paragraph note on why v0's Action keeps esbuild
+      (different problem, byte-stable Node-CJS target)
+
+    **Cross-track context:** UI3–UI8 consume the bundler decision.
+    This ADR is a soft input — the bundler is locked here, but the
+    UI track's hard dep is UI2 (design system), not A5.
+
+# ============================================================
+# Data model track (8 entries)
+# ============================================================
+
+- id: D6
+  track: data-model
+  title: "Schema portability spec (SQLite ↔ Postgres + Drizzle conventions)"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Document the rules every v1 schema file must follow to remain portable
+    between SQLite and Postgres. v1 uses Drizzle ORM as the abstraction;
+    schema portability between SQLite and Postgres is a non-negotiable v1
+    design constraint (single-deploy SQLite must remain a first-class option,
+    and the seamless `DATABASE_URL=postgres` switch depends on it).
+
+    Cover:
+
+    - **(a) Types.** Use Drizzle's portable type set (`text`, `integer`,
+      `real`, `blob`, `timestamp`); avoid Postgres-only types (`uuid`,
+      `jsonb`, `array`, `hstore`) unless an explicit SQLite fallback
+      is specified.
+    - **(b) Constraints.** PK / FK / UNIQUE / CHECK supported in both
+      dialects; document the small CHECK-syntax differences.
+    - **(c) Indexes.** Partial indexes work in both with slight syntax
+      differences; document them.
+    - **(d) JSON columns.** TEXT in SQLite, JSONB in Postgres, accessed
+      via Drizzle's `json` type wrapper.
+    - **(e) Migrations.** `drizzle-kit generate` workflow against both
+      dialects; document the workflow.
+
+    **Output:** `docs/schema/portability.md` plus a sample portable schema
+    file demonstrating the conventions in practice.
+
+- id: D7
+  track: data-model
+  title: "tenant_id surface specification"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Specify how `tenant_id` appears in the data model and is enforced at
+    the query layer. v1's design rule: every table reserves a `tenant_id`
+    column from day one so that the multi-tenant flip later is a backfill,
+    not a migration. v1 ships single-tenant by default; the column is
+    forward-compat for the eventual `MULTI_TENANT=true` flag.
+
+    Cover:
+
+    - **(a)** Every table has a non-null `tenant_id` column with a default
+      value of `'default'` (the constant for single-tenant deployments).
+    - **(b)** All FK relationships include `tenant_id` in composite keys
+      to prevent cross-tenant references at the schema level.
+    - **(c)** Middleware sets a tenant context on each request derived
+      from the authenticated session.
+    - **(d)** Drizzle queries are wrapped to inject `tenant_id`
+      automatically so application code can't accidentally bypass it.
+    - **(e)** The `MULTI_TENANT=true` flag gates the middleware's tenant
+      resolution — off forces `'default'`; on derives from session /
+      subdomain / etc. The subdomain resolution mechanism is a separate
+      ADR, out of scope for this issue.
+
+    **Output:** `docs/schema/tenant-id-surface.md` plus a sample middleware
+    outline demonstrating the wrap pattern.
+
+- id: D8
+  track: data-model
+  title: "Skill table and join tables (TaskSkill, AgentSkill)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D6, D7]
+  body: |
+    Define the canonical Skill table seeded with the v0 skill set
+    (`research`, `writing`, `translation`, `code`, `review` per SPEC.md
+    §Canonical labels) plus the join tables TaskSkill and AgentSkill.
+
+    Cover:
+
+    - **(a) Skill names match GitHub label slugs.** `Skill.name` values
+      match the `skill:*` label slugs in `.github/labels.yml` exactly so
+      v1's labels and v0's labels stay synchronized.
+    - **(b) Seeding is migration-driven.** New skills are added via
+      migration, not hardcoded. The v0 set ships in the initial migration.
+    - **(c) IronHub is the canonical source long-term.** v1's Skill table
+      is a synced cache of IronHub's skill registry; the sync mechanism
+      is INT5's scope (IronHub skill matching ADR), not this issue's.
+    - **(d) tenant_id propagates through joins.** TaskSkill and AgentSkill
+      both carry `tenant_id` per D7's surface spec.
+
+    Cross-track context: D1 (Task entity) and D3 (Agent entity) both
+    formally depend on D8 — closing D8 unblocks the M:N join definitions
+    in those issues. Constraints follow D6.
+
+    **Output:** `src/db/schema/skill.ts` + `docs/schema/skill.md`
+
+- id: D2
+  track: data-model
+  title: "Project entity schema"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D6, D7]
+  body: |
+    Define the Project entity.
+
+    Schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7 surface spec
+    - `owner_agent_id` FK Agent
+    - `name` text
+    - `description` text/markdown
+    - `mode` enum: `pure-app` | `sync-mode`
+      (note: pure-convention is the absence of a Project row, not a state
+      on this table)
+    - **(INT7 marker)** an `authoritative_side` column will be added
+      here by INT7's deliverable PR — `'github' | 'app'`, default
+      `'github'`, additive (do not alter the `mode` enum). Place a
+      code-comment in the schema source at this exact position so the
+      future PR is mechanical rather than archaeological. Comment
+      shape (type and constraint follow D6 portability — text with a
+      CHECK rather than a Postgres-only enum):
+      ```
+      // INT7 will add authoritative_side: text NOT NULL DEFAULT 'github',
+      // CHECK (authoritative_side IN ('github', 'app')). Additive —
+      // do not alter the mode enum.
+      ```
+    - `github_repo_url` nullable text — present in sync-mode only
+    - `settings` JSON column for project-scoped config
+    - `created_at`, `updated_at`
+
+    Indexes:
+    - `(tenant_id)` for tenant-scoped listing
+    - `(owner_agent_id)` for "projects I own" queries
+    - `(github_repo_url)` unique partial index
+
+    Constraints follow D6. tenant_id follows D7. Per INT7's
+    schema-update commitment, the `authoritative_side` column lands as
+    part of INT7's deliverable PR — the code-comment marker above
+    indicates the line where that edit is expected.
+
+    **Output:** `src/db/schema/project.ts` + `docs/schema/project.md`
+
+- id: D1
+  track: data-model
+  title: "Task entity schema"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D6, D7, D8]
+  body: |
+    Define the canonical Task table for v1.
+
+    Schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7
+    - `project_id` FK Project
+    - `title` text
+    - `body` text/markdown
+    - `state` enum: `ready` | `in-progress` | `blocked` | `closed`
+      (matches SPEC.md §Convention Rule 1 — closing the issue means done;
+      no `done` label or state)
+    - `assignee_id` FK Agent, nullable
+    - `github_issue_url` nullable text — present in sync-mode projects,
+      null in pure-app projects
+    - `created_at`, `updated_at`
+    - M:N to Skill via TaskSkill join (defined in D8)
+
+    Indexes:
+    - `(project_id, state)` for board-view queries
+    - `(assignee_id)` for "tasks I'm working on" queries
+    - `(github_issue_url)` unique partial index — uniqueness only when
+      the URL is present
+
+    Constraints follow D6 portability spec. tenant_id semantics follow
+    D7. M:N join references D8's Skill + TaskSkill schema.
+
+    **Output:** `src/db/schema/task.ts` + `docs/schema/task.md` justifying
+    the choices.
+
+- id: D3
+  track: data-model
+  title: "Agent entity schema (human/agent unified)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D6, D7, D8]
+  body: |
+    Define the Agent table covering both humans and IronClaw agents via
+    a `kind` discriminator. v1's modeling rule: Agent is human-or-IronClaw
+    on one table; GitHub identity is the join key (the same GitHub login
+    that owns the OAuth session or the PAT). One table simplifies queries
+    (assignment, presence, suggestion) at the cost of a few null columns
+    per row that don't apply to the other kind.
+
+    Schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7
+    - `kind` enum: `human` | `ironclaw`
+    - `github_login` text, unique within tenant
+    - `display_name` text
+    - `avatar_url` text
+    - M:N to Skill via AgentSkill join (defined in D8)
+    - `created_at`, `updated_at`, `last_active_at`
+
+    IronClaw-only fields (nullable for humans):
+    - `ironclaw_routine_id` text
+    - `owner_agent_id` FK Agent — the human who registered the bot
+
+    Constraints (CHECK):
+    - When `kind = 'ironclaw'`, `ironclaw_routine_id` and `owner_agent_id`
+      are required (NOT NULL).
+    - When `kind = 'human'`, both must be NULL.
+
+    Output explains the unified-table rationale (rather than separate
+    User and Bot tables) — primarily that claims, handoffs, and presence
+    indicators all need to address either kind through the same FK,
+    avoiding polymorphic associations.
+
+    **Output:** `src/db/schema/agent.ts` + `docs/schema/agent.md`
+
+- id: D5
+  track: data-model
+  title: "Dependency edges (typed self-referential)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D1]
+  body: |
+    Define the Dependency edge.
+
+    Schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7
+    - `from_task_id` FK Task — the dependent
+    - `to_task_id` FK Task — the parent
+    - `kind` enum: `blocks` (hard, gates ready→in-progress) |
+      `tracks` (soft sub-issue, doesn't gate)
+    - `created_at`
+
+    Constraints:
+    - `from_task_id != to_task_id` (CHECK; no self-loops)
+    - Composite UNIQUE on `(from_task_id, to_task_id, kind)` to prevent
+      duplicate edges of the same type
+
+    Indexes:
+    - `(from_task_id)` for outgoing-edge lookup
+    - `(to_task_id)` for incoming-edge lookup
+
+    **Cycle detection is out of scope for the schema** — enforced at the
+    API/service layer. Specification: when a Dependency is being created,
+    the service performs a depth-bounded BFS from `from_task_id` following
+    existing edges; if the proposed `to_task_id` is reachable, reject
+    with HTTP 409. Bound depth to 100 to prevent pathological scans on
+    adversarial graphs. This rule is documented in this ADR but
+    implemented in the API track.
+
+    **Implementation lands in API4** (REST CRUD surface) when
+    Dependency-creation endpoints are specified, or **API5** (event-verb
+    endpoints) if dependency promotion happens via verb. The agent
+    authoring API4/API5 should cite D5 as the source of the
+    cycle-detection rule.
+
+    **Output:** `src/db/schema/dependency.ts` + `docs/schema/dependency.md`
+
+- id: D4
+  track: data-model
+  title: "Claim and Handoff event records"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D1, D3]
+  body: |
+    Define two append-only event tables.
+
+    **Claim** schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7
+    - `task_id` FK Task
+    - `agent_id` FK Agent
+    - `claimed_at` timestamp
+    - `released_at` timestamp, nullable (NULL while active)
+    - `released_reason` enum: `completed` | `blocked` | `abandoned` |
+      `preempted`, nullable
+
+    **Handoff** schema:
+    - `id` BIGINT primary key
+    - `tenant_id` per D7
+    - `task_id` FK Task
+    - `agent_id` FK Agent
+    - `posted_at` timestamp
+    - `parsed_metadata` JSON — output of `parseHandoff` from the v0
+      shared library (the handoff format is the v0 spec, byte-identical,
+      and evolves additively: v1 readers must accept all v0 handoffs)
+    - `raw_body` text — the full comment body
+    - `github_comment_url` nullable text — present in sync-mode projects
+
+    Both tables are append-only:
+    - Claim: only `released_at` and `released_reason` are mutable, and
+      only as a single transition (active → released).
+    - Handoff: never mutated after insert.
+
+    Indexes:
+    - Claim `(task_id) WHERE released_at IS NULL` — partial index per
+      D6 conventions, fast active-claim lookup
+    - Handoff `(task_id, posted_at)` for time-ordered listing
+
+    JSON column conventions follow D6. tenant_id follows D7.
+
+    **Output:** `src/db/schema/events.ts` + `docs/schema/events.md`
+
+# ============================================================
+# API track (8 entries)
+# ============================================================
+
+- id: API1
+  track: api
+  title: "REST + OpenAPI conventions"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Document v1's API conventions before any endpoint is specified.
+    v1 chooses REST + JSON + OpenAPI (no GraphQL); re-deciding the
+    protocol style is out of scope for this issue (RD2 writes the
+    rationale separately).
+
+    Cover:
+
+    - **URL slug case.** Default kebab-case, plural resources
+      (`/v1/projects/:id/tasks`).
+    - **JSON casing.** camelCase; snake_case rejected to match TypeScript
+      ergonomics.
+    - **Error envelope.** RFC 7807 Problem+JSON.
+    - **Standard error codes.** `validation_failed`, `unauthorized`,
+      `forbidden`, `not_found`, `conflict`, `rate_limited`.
+    - **Request validation library.** Zod default.
+    - **Response envelope.** Raw resource, no `data:` wrapping.
+    - **Versioning strategy.** `/v1/` prefix locked; `/v2/` adoption
+      rules deferred.
+
+    Closing API1 unblocks API4, API5, API6, API7 simultaneously — these
+    four downstream issues all inherit conventions from this one.
+
+    **Output:** `docs/api/0000-conventions.md`
+
+- id: API2a
+  track: api
+  title: "ADR: auth modes shortlist"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Survey the three auth modes for v1 and produce a per-route accepted-
+    token matrix. v1's auth approach: GitHub OAuth (browser sessions)
+    plus GitHub PAT (API), with no NEAR-wallet dependency. The product
+    is GitHub-centric — every Agent identity already has a GitHub login —
+    so layering a separate wallet identity at v1 adds friction without
+    enabling anything v1 needs. Wallet identity is a v2+ question.
+
+    Cover:
+
+    - **(a) Session cookies for browser UI.** GitHub OAuth flow → app
+      session cookie. Recommend session storage mechanism at a high
+      level only — JWT-vs-server-side-table is NOT decided here, that
+      is API2b's scope.
+    - **(b) GitHub PAT for programmatic API consumers.** App validates
+      against GitHub's `/user`. No token storage (or hashed-only).
+    - **(c) App-installation tokens for high-volume integrations.**
+      GitHub App registered, installation tokens minted per-tenant.
+
+    Per-route matrix: which routes accept which token types. UI routes
+    accept (a). API routes accept (b) and (c). Webhook routes accept
+    GitHub's signature scheme (separate; API7's scope).
+
+    **Out of scope for this issue:** session storage mechanism (API2b),
+    token-revocation implementation, audit-log shape.
+
+    **Output:** `docs/api/0001-auth-modes.md` (~1 page)
+
+- id: API2b
+  track: api
+  title: "ADR: session implementation"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [API2a]
+  body: |
+    Decide v1's session storage mechanism. API2a settled the auth
+    modes; this issue picks the implementation for the session-cookie
+    path.
+
+    Decision:
+    - **JWT (stateless).** Easier to scale horizontally; harder to
+      revoke (need a denylist or short expiry).
+    - **Server-side session table.** Stateful; simpler revocation
+      (delete the row); requires session storage that survives
+      container restarts (DB-backed via D7's Drizzle schema).
+
+    Cover:
+    - Chosen mechanism with rationale
+    - Expiry strategy and refresh flow
+    - Revocation flow (logout, "log out everywhere", admin-driven)
+    - Cookie attributes: `HttpOnly`, `Secure`, `SameSite=Lax` (or
+      `Strict` if cross-site flows are out of scope)
+
+    **Cross-track context:** if the chosen mechanism requires a Sessions
+    table, that schema is implementation-time work — added to the
+    data-model when v1 implementation begins, not now during roadmap
+    authoring. The agent claiming API2b records the table requirement
+    in its handoff for the v1 implementer to consume.
+
+    **Output:** `docs/api/0001b-session-impl.md`
+
+- id: API3
+  track: api
+  title: "ADR: OpenAPI generation tooling"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:research
+  depends_on: [A1]
+  body: |
+    Decide how v1 generates and serves its OpenAPI spec. The chosen
+    framework from A1 narrows the tooling — read A1's handoff before
+    starting this issue.
+
+    Options:
+    - **(a) Hand-authored YAML** in `docs/api/openapi.yaml`, manually
+      synced. Cheapest to start, expensive to maintain.
+    - **(b) Generated from route-handler annotations.** Hono has
+      `@hono/zod-openapi`; Fastify has its built-in OpenAPI plugin.
+    - **(c) Generated from Zod schemas** via `zod-openapi`. Works
+      across frameworks; requires more glue.
+
+    Per-framework recommendation:
+    - If A1 chose Hono → (b) via `@hono/zod-openapi` is the strong
+      default.
+    - If A1 chose Fastify → (b) via the built-in plugin is the
+      strong default.
+    - If A1 chose Express → (c) since Express has weaker generation,
+      pushing toward Zod-driven.
+
+    **Cross-track dep:** A1 (web framework selection in architecture
+    track). The agent claiming API3 reads A1's handoff first to know
+    which framework's tooling to recommend.
+
+    **Output:** `docs/api/0002-openapi-tooling.md` + setup recipe.
+
+- id: API4
+  track: api
+  title: "REST CRUD surface"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [API1, D1, D2, D3, D5, D8]
+  body: |
+    Define CRUD endpoints for Projects, Tasks, Agents, Dependencies,
+    and Skills. URL shapes inherit from API1; resource shapes inherit
+    from data-model schemas D1/D2/D3/D5/D8.
+
+    Cover:
+    - URL patterns (`/v1/projects`, `/v1/projects/:id/tasks`,
+      `/v1/agents`, `/v1/projects/:id/dependencies`, `/v1/skills`).
+    - HTTP verbs per resource (POST create / GET list / GET item /
+      PATCH update / DELETE remove).
+    - Request and response shapes referencing the schemas from D1,
+      D2, D3, D5, D8.
+    - **Pagination.** Cursor-based (not offset/limit). Cursor encoding
+      recommendation: opaque base64-encoded JSON containing the last
+      item's primary sort field value plus its ID. Cursors must be
+      signed (HMAC) so clients can't tamper with the sort field to
+      skip ahead. Alternative encodings (ULID-based, signed-only,
+      etc.) are acceptable if the rationale is documented. The cursor
+      format is internal — clients treat it as opaque.
+    - Filter and sort surface (which fields filter by, how sorts
+      compose).
+    - **Dependency-creation endpoint** picks up D5's cycle-detection
+      rule: depth-bounded BFS from `from_task_id`, depth bound 100,
+      reject reachable `to_task_id` with HTTP 409.
+
+    **Cross-track deps:** API1 (conventions), D1 (Task), D2 (Project),
+    D3 (Agent), D5 (Dependency), D8 (Skill). Read each upstream issue's
+    handoff before authoring response shapes.
+
+    **Output:** `docs/api/0003-crud-surface.md` + OpenAPI fragment.
+
+- id: API5
+  track: api
+  title: "Event-verb endpoints (claim, complete, block, unblock)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [API1, D1, D4]
+  body: |
+    Define non-CRUD verb endpoints that drive Task state transitions.
+
+    Endpoints:
+    - `POST /v1/tasks/:id/claim` — agent or human claims the task
+    - `POST /v1/tasks/:id/complete` — body includes the handoff
+      payload; writes to D4's Handoff table
+    - `POST /v1/tasks/:id/block` — body includes block reason
+    - `POST /v1/tasks/:id/unblock` — restores `in-progress` if claim
+      is still active, else `ready` with assignee cleared (matches
+      SPEC.md §Convention Rule 5)
+
+    Cover:
+    - Request shapes per verb
+    - Idempotency via `Idempotency-Key` header (retry-safe)
+    - State-transition validation (can't `complete` an unclaimed
+      task; can't `block` a closed task; matches SPEC.md §Convention
+      Rule 2's claim-as-one-step semantics)
+    - How Claim and Handoff records get written per D4's schema
+    - Conflict semantics (409 if state has shifted since the request
+      was authored)
+
+    **Cross-track deps:** API1 (conventions), D1 (Task state enum),
+    D4 (Claim and Handoff event records).
+
+    **Output:** `docs/api/0004-event-verbs.md` + OpenAPI fragment.
+
+- id: API6
+  track: api
+  title: "SSE channel for real-time updates"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [API1, D1]
+  body: |
+    Specify the Server-Sent Events surface for live updates.
+    v1 uses Server-Sent Events for real-time updates, not WebSockets:
+    SSE is simpler to self-host (no WS-upgrade proxy work, no sticky
+    sessions) and sufficient for kanban presence indicators (clients
+    are read-mostly; writes go through API verbs). Re-deciding SSE-vs-WS
+    is out of scope (RD4 writes the rationale separately).
+
+    Endpoint: `GET /v1/projects/:id/events`
+
+    Cover:
+    - **Event types.** `task.created`, `task.state_changed`,
+      `claim.created`, `handoff.posted`, `agent.presence`.
+    - **Payload shapes.** Deltas, not full state. Each event includes
+      enough fields to update a client cache without re-fetching.
+    - **Reconnection semantics.** `Last-Event-ID` header on reconnect
+      replays missed events. Document the replay window (e.g. 5
+      minutes; events older than that force a full re-fetch).
+    - **Authentication on long-lived streams.** Token-in-query-string
+      vs cookie behavior across browsers; recommend cookie.
+    - **Idle timeout / heartbeat.** Heartbeat events every 30s to
+      detect dead connections through proxies.
+    - **Tenant isolation.** No cross-tenant event leakage; the
+      tenant context from D7's middleware filters every event.
+
+    **Cross-track deps:** API1 (conventions), D1 (Task state for
+    `task.state_changed` payloads).
+
+    Consumed downstream by UI6 (agent presence renderer in the UI
+    track).
+
+    **Output:** `docs/api/0005-sse-channel.md`
+
+- id: API7
+  track: api
+  title: "GitHub-sync mechanics (webhook receiver + outbound pull)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [API1, D1, D2, D4]
+  body: |
+    Specify both directions of GitHub-sync. GitHub-sync is a v1
+    first-class feature, not deferred to v1.5+ (RD7 writes the
+    rationale separately).
+
+    **Inbound (GitHub → v1).**
+    - Webhook receiver at `/v1/webhooks/github`
+    - Handles `issues.opened`, `issues.closed`, `issues.labeled`,
+      `issues.assigned`, `issues.edited`, plus `issue_comment.*`
+      events for handoff comments
+    - Signature verification per GitHub's standard scheme
+    - Idempotency keyed on `X-GitHub-Delivery` header
+
+    **Outbound (v1 → GitHub).**
+    - Periodic-pull cron worker for projects whose deployment can't
+      expose public webhooks (firewalled, no public IP)
+    - Reconciliation algorithm: compare app state with GitHub state,
+      write deltas to GitHub via the API
+    - Conflict resolution per Project.mode
+
+    **Authoritative-side semantics per Project.mode value are this
+    issue's output, not assumed input.** D2 defines the enum (per the
+    data-model track); API7 defines what each enum value means for
+    sync precedence. Per INT7's schema-update commitment, the chosen
+    approach (split enum into github-authoritative vs app-authoritative,
+    or add a separate `authoritative_side` column) lands as a D2 PR
+    alongside `docs/integration/0005-sync-conflicts.md` (INT7's
+    deliverable). Authoring API7 may proceed against the unsplit enum
+    if INT7 hasn't closed yet, but should reserve the design surface
+    for the split.
+
+    **Cross-track deps:** API1 (conventions), D1 (Task), D2 (Project
+    with mode), D4 (Handoff records — handoff comment ingestion writes
+    to D4's table).
+
+    Soft input: INT2's existing-OSS-sync research, if closed before
+    this issue is claimed (per the kanban-worker SKILL.md guidance).
+
+    **Output:** `docs/api/0006-github-sync.md` + sample reconciliation
+    pseudocode.
+
+# ============================================================
+# Integration track (7 entries)
+# ============================================================
+
+- id: INT1
+  track: integration
+  title: "Integration philosophy and v1 boundaries"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Document v1's integration philosophy. v1 ships GitHub-only
+    integration; a generic plugin architecture is post-v1 work,
+    justified only by a real second integration request. Re-deciding
+    the plugin-vs-hardcoded shape is out of scope for this issue.
+
+    Cover:
+
+    - **Rationale for skipping plugin abstraction.** Plugin architectures
+      pay design tax up front for flexibility you don't have requirements
+      for. If a real second integration request arrives, that's the
+      moment to abstract.
+    - **What counts as "integration" in v1.** GitHub-sync via webhook +
+      pull (API7's scope), IronClaw event ingestion (INT4), IronHub
+      skill matching (INT5).
+    - **What's deferred.** Linear, Notion, custom CRMs, Slack, generic
+      webhooks. All v1.5+.
+    - **v1.5+ candidate list with entry-criteria.** Which integrations
+      get prioritized, and what triggers each (real user request from
+      paying tier, strategic partnership outreach, etc.).
+
+    **Output:** `docs/integration/0000-philosophy.md`
+
+- id: INT2
+  track: integration
+  title: "Research: existing OSS GitHub-sync implementations"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Survey how existing OSS tools (Plane, OpenProject, Trilium, Gitea
+    issue-mirror tooling, etc.) handle GitHub-sync.
+
+    Cover per tool:
+    - **(a) Bidirectional-relationship modeling.** How does the tool
+      represent the GitHub side of a project — separate table, mirrored
+      schema, opaque JSON?
+    - **(b) Conflict resolution patterns.** What does each do when
+      both sides change between sync ticks?
+    - **(c) Common failure modes.** Rate limits, webhook delivery
+      failures, schema drift, label-set mismatches.
+    - **(d) Adopt vs avoid.** Which patterns v1 should adopt, which
+      to avoid.
+
+    **Soft input** to INT7 (conflict rules) and API7 (sync mechanics) —
+    INT2 informs but does not formally block them. The kanban-worker
+    SKILL.md teaches downstream agents to read closed soft-input
+    research handoffs before claiming downstream issues that reference
+    them; the agent authoring INT7 or API7 should read INT2's handoff
+    if INT2 has closed by then.
+
+    **Output:** `docs/integration/research-existing-sync-impls.md`
+
+- id: INT3
+  track: integration
+  title: "Project mode lifecycle and migration paths"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D1, D2]
+  body: |
+    Specify the system-level lifecycle for project modes. v1 supports
+    three modes: pure-convention (issues on GitHub, no app row),
+    pure-app (issues in app DB, no GitHub mirror), sync-mode (both,
+    authoritative side per project setting). The three-mode design lets
+    teams adopt v1 incrementally — start with the convention on GitHub,
+    add the app for the dashboard, optionally drop GitHub for fully-
+    contained projects.
+
+    Cover:
+
+    - **(a) Onboarding.** A project starts as pure-convention (no app
+      row). The user opts in by pointing the app at a GitHub repo →
+      Project row created in pure-app or sync-mode. Sync-mode imports
+      existing issues, labels, dependencies, and handoff history (the
+      importer is INT6's scope).
+    - **(b) Migration paths.**
+      - pure-convention → sync-mode: additive, no data loss
+      - sync-mode → pure-app: removes GitHub sync, keeps `github_issue_url`
+        as historical reference
+      - pure-app → sync-mode: back-syncs to a designated GitHub repo
+      - pure-app → pure-convention: deferred to v1.5
+    - **(c) Off-ramp.** When a user wants out of v1, export to GitHub
+      Issues with handoff comments preserved. Off-ramp is a v1 feature,
+      not v1.5 — users must be able to leave without losing data per
+      the convention's durability commitment.
+
+    **Cross-track deps:** D1 (Task — for migration semantics on per-task
+    state), D2 (Project — for the mode enum and `github_repo_url`).
+
+    **Output:** `docs/integration/0001-project-modes.md`
+
+- id: INT4
+  track: integration
+  title: "IronClaw event ingestion"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:research
+  depends_on: [D1, D3, D4]
+  body: |
+    Specify how IronClaw routines interact with v1 projects natively
+    (without GitHub). v1's design: the app exposes a webhook IronClaw
+    routines post to natively, so agents can interact with pure-app
+    projects without GitHub at all. This is the symmetry that makes
+    pure-app a viable mode rather than a degraded sync-mode.
+
+    Cover:
+
+    - **Webhook endpoint.** v1 accepts claim, complete, block, unblock,
+      handoff verbs from IronClaw routines posted directly. Maps to
+      API5's verb endpoints conceptually but with IronClaw-specific
+      auth.
+    - **Authentication.** Per IronClaw's pattern — signed payloads from
+      the routine owner's IronClaw deployment. Consult
+      [docs.ironclaw.com/llms.txt](https://docs.ironclaw.com/llms.txt)
+      for the canonical event-shape spec; this is the authoritative
+      reference for IronClaw payload structure.
+    - **Discovery.** How an IronClaw routine knows v1 exists for a given
+      project. Two candidate mechanisms:
+      - **(a)** Project owner configures the routine with v1's webhook
+        URL when they set the routine up.
+      - **(b)** The kanban-worker skill is taught to read an `app_url`
+        field exposed in Project metadata via the GitHub API or v1's
+        public Project endpoint, and posts there in addition to (or
+        instead of) GitHub.
+    - **Recommend (b)** if the discovery cost is acceptable —
+      configuration-free for routine owners.
+
+    **Cross-track deps:** D1 (Task), D3 (Agent — IronClaw routines map
+    to Agent rows with `kind='ironclaw'`), D4 (Claim and Handoff event
+    records — the verbs write to these).
+
+    **External authoritative reference:** docs.ironclaw.com/llms.txt
+    must be fetched and treated as canonical for the IronClaw event
+    shape. Per kanban-worker SKILL.md guidance, agents fetch external
+    doc URLs referenced in issue bodies and treat their contents as
+    authoritative for that issue's scope.
+
+    **Cross-org coordination escape hatch.** If
+    docs.ironclaw.com/llms.txt is unclear or incomplete on the
+    routine-side webhook payload shape, the agent's deliverable
+    includes a list of specific questions for the IronClaw team plus
+    a proposed payload shape v1 would prefer. Cross-org coordination —
+    flag in handoff.
+
+    **Output:** `docs/integration/0002-ironclaw-ingestion.md`
+
+- id: INT5
+  track: integration
+  title: "IronHub skill matching"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:research
+  depends_on: [D3, D8]
+  body: |
+    Specify how v1 queries IronHub at issue creation to suggest agents
+    whose registered skills match the issue's `skill:*` labels. v1's
+    design: at issue creation the app queries IronHub for agents whose
+    registered skills match the issue's `skill:*` labels and surfaces
+    them as suggested assignees. The suggestion is preview-only — claim
+    is still explicit per SPEC.md §Convention Rule 2 — but the discovery
+    closes the gap between "this issue needs `skill:research`" and
+    "which of the registered agents can claim it."
+
+    Cover:
+
+    - **IronHub's skill-query API surface.** Research what IronHub
+      exposes today. Reference: [nearai/ironhub](https://github.com/nearai/ironhub)
+      for the current API. If no public skill-query API exists yet,
+      this issue's deliverable includes a proposed API contract for
+      IronHub to add (cross-org coordination — flag in handoff).
+    - **v1's caching strategy.** TTL on cached responses; invalidation
+      events from IronHub if available; fallback to no-cache if IronHub
+      doesn't support invalidation.
+    - **UI surface.** Preview-only suggestions, never auto-assign. The
+      claim mechanism (SPEC.md §Convention Rule 2) requires explicit
+      self-assignment; IronHub suggestions don't bypass that.
+    - **Tenant boundary.** Suggestions only include agents in the
+      project's collaborator set or the tenant. No cross-tenant
+      visibility.
+    - **Graceful degradation.** When IronHub is unavailable, suggestions
+      hide; issue creation still works.
+
+    **Cross-track deps:** D3 (Agent — for resolving suggested IDs to
+    real Agent rows), D8 (Skill — for the skill-id mapping).
+
+    **Output:** `docs/integration/0003-ironhub-skill-matching.md`
+
+- id: INT6
+  track: integration
+  title: "Migration importer (pure-convention → sync-mode)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D1, D2, D3, D4, D5, D8]
+  body: |
+    Design the importer that takes an existing GitHub repo with v0
+    convention usage and creates a v1 Project in sync-mode preserving
+    history.
+
+    Cover:
+
+    - **Issue-by-issue import.** Walk the repo's issues; for each:
+      - Map to a Task row per D1's schema with `github_issue_url`
+        preserved as the join key
+      - Translate `skill:*` labels to TaskSkill joins per D8's schema
+      - Parse dependency body links via the v0 dependencies parser
+        (`src/lib/dependencies.ts`) to populate Dependency rows per D5
+      - Walk issue comments; for each comment containing a ` ```handoff `
+        fence, parse via the v0 `parseHandoff` library and write a
+        Handoff row per D4's schema
+    - **Assignee mapping.** GitHub login → v1 Agent row. Create
+      placeholder Agent rows (`kind='human'`, `display_name = github_login`)
+      for users who haven't logged into v1 yet — they fill in their
+      profile when they first sign in.
+    - **Rate-limit handling.** GitHub allows 5000 req/hr authenticated;
+      large repos chunk imports across multiple ticks.
+    - **Idempotency.** Re-running the importer doesn't duplicate. Use
+      `github_issue_url` as the uniqueness key on the Task table.
+
+    **Cross-track deps:** D1, D2, D3, D4, D8 — touches every entity.
+
+    **Shared library reference:** the v0 `parseHandoff` library is
+    consumed unchanged by the importer. The handoff format is the v0
+    spec, byte-identical, and evolves additively: v1 readers must
+    accept all v0 handoffs.
+
+    **Output:** `docs/integration/0004-importer.md` + sample import-flow
+    diagram.
+
+- id: INT7
+  track: integration
+  title: "Conflict resolution rules in sync-mode"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [D2, API7]
+  body: |
+    When sync-mode is active and the same issue is edited on both sides
+    between sync ticks, specify which side wins.
+
+    **Authoritative-side model.** Choose one of:
+
+    - **(a) Split the enum.** Replace `sync-mode` in D2's `mode` enum
+      with `sync-mode-github-authoritative` and `sync-mode-app-authoritative`.
+    - **(b) Add a column.** Keep D2's `mode = sync-mode` and add a
+      separate `authoritative_side` column on Project (`'github' | 'app'`).
+
+    **Recommended: option (b) — add a separate `authoritative_side`
+    column.** Reasoning: enum split would require renaming an existing
+    value (`sync-mode` → `sync-mode-*`), which is a database migration
+    touching every existing row; column addition is purely additive
+    (the new column defaults to `NULL` or `'github'` for existing
+    sync-mode rows). For v0/early-v1 with empty production state this
+    is a wash, but the additive shape is more honest about what's
+    happening — the mode is still "sync", and which side is authoritative
+    is a separate axis. The agent claiming INT7 may override with
+    rationale, but the recommendation accounts for additive-schema
+    safety and conceptual orthogonality (mode = "what kind of sync";
+    authoritative_side = "which side wins on conflict").
+
+    **Schema-update commitment to D2.** Whichever approach is chosen,
+    the schema update lands as part of INT7's deliverable, not a
+    deferred follow-up. The PR for `docs/integration/0005-sync-conflicts.md`
+    includes the D2 edit. D2's body has been authored with a
+    code-comment marker indicating where the future edit lands so this
+    PR is mechanical rather than archaeological.
+
+    **Conflict cases to specify** (per side):
+    - **Title** edited both sides → authoritative wins
+    - **State** changed both sides → state-machine collapse:
+      `closed > open`, `blocked > ready`, etc.
+    - **Labels** diverged → authoritative wins; tag-only union TBD
+    - **Assignee** changed → authoritative wins
+    - **Comments** → always merge, both sides preserved
+
+    **Cross-track deps:** D2 (Project mode — INT7 lands the schema
+    update), API7 (sync mechanics — INT7 specifies the conflict rules
+    that API7's reconciliation algorithm enforces).
+
+    **Soft input:** INT2's existing-OSS-sync research, if closed before
+    this issue is claimed (per the kanban-worker SKILL.md guidance on
+    soft-input research handoffs).
+
+    **Output:** `docs/integration/0005-sync-conflicts.md` plus the D2
+    schema edit as part of the same PR.
+
+# ============================================================
+# UI track (8 entries)
+# ============================================================
+
+- id: UI1
+  track: ui
+  title: "Research: existing kanban UI patterns"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Survey existing kanban tools (Linear, Trello, Notion, GitHub Projects,
+    Plane, Asana) and document patterns to copy and patterns to avoid.
+
+    Cover per tool:
+    - **Column treatment.** Width, count flexibility, header design,
+      empty-column handling.
+    - **Card density.** Information per card; what's hidden vs surfaced.
+    - **Drag interactions.** What's allowed, what triggers prompts,
+      what's instant.
+    - **Detail panel pattern.** Overlay vs push-content vs full-page;
+      where comments live.
+    - **Presence indicators.** How concurrent users are surfaced.
+    - **Dark mode quality.** First-class or afterthought.
+
+    Output what v1 should adopt and what to actively avoid.
+
+    **Soft input** to UI3–UI8. Per kanban-worker SKILL.md guidance,
+    downstream UI agents read closed soft-input research handoffs before
+    claiming, so UI3–UI8 authors will consume this issue's output for
+    consistency.
+
+    **Output:** `docs/ui/research-existing-patterns.md`
+
+- id: UI2
+  track: ui
+  title: "Design system foundations and dark-mode-first approach"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Establish v1's design system. Dark mode is required from day one —
+    the design system is dark-mode primary, light secondary. (Reasoning:
+    the target user is a developer working long sessions; dark-first
+    matches editor / terminal / GitHub-dark norms.)
+
+    Cover:
+
+    - **Design tokens.** Colors (primary, surface, text, semantic),
+      typography (scale, weights, line-heights), spacing (4px grid),
+      radii, shadows.
+    - **Dark mode primary, light secondary.** Both themes shipping in
+      v1; dark is the canonical reference.
+    - **Accessibility.** WCAG AA contrast minimums on every token pair.
+    - **Responsive breakpoints.** Mobile-first or desktop-first
+      decision; breakpoint values.
+    - **Component primitives library.** Decision: shadcn/ui vs Radix UI
+      primitives vs Mantine vs Headless UI. Optimize for tree-shaking,
+      a11y defaults, and TypeScript ergonomics.
+    - **CSS strategy.** Tailwind v4 default unless compelling reason
+      otherwise.
+    - **Canonical state patterns.** Empty states (illustration +
+      guidance), loading states (skeleton loaders, not spinners),
+      error states (inline + toast conventions), disconnected states
+      (banner + reconnect indicator). These tokens are the cross-cutting
+      vocabulary that UI3–UI8 inherit; novel states (e.g.
+      presence-disconnected for UI6) extend this vocabulary in their
+      own issues.
+
+    Closing UI2 unblocks UI3, UI4, UI5, UI7, UI8 simultaneously and
+    is one half of UI6's prerequisites — strongest single-issue fan-out
+    in the roadmap.
+
+    **Output:** `docs/ui/0000-design-system.md` + token tables + state
+    pattern reference sheet.
+
+- id: UI3
+  track: ui
+  title: "Board view layout and card design"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [UI2]
+  body: |
+    Specify the kanban board view.
+
+    Cover:
+    - **Columns.** Four columns matching D1's state enum: `ready`,
+      `in-progress`, `blocked`, plus a closed/done view (which may be
+      hidden by default and revealed via toggle).
+    - **Column ordering and visual treatment.** Per UI2 tokens.
+    - **Card content.** Title, assignee avatar with tooltip, skill
+      badges (chip form), dependency count icon if >0, last-activity
+      timestamp.
+    - **Card states.** Default, hover, focused, dragging.
+    - **Drag-and-drop semantics.** Drag is an input affordance only —
+      every state transition resolves to the corresponding verb endpoint
+      from API5. Drag `ready` → `in-progress` invokes
+      `POST /v1/tasks/:id/claim` under the hood; drag `in-progress` →
+      `blocked` opens a block-reason modal then invokes
+      `POST /v1/tasks/:id/block`; etc. **The UI never bypasses the
+      verb endpoints.** Drag is rejected (with reason toast) when the
+      underlying transition would be invalid. **Optimistic UI is
+      allowed visually** (card moves on drag-end before server response)
+      but state changes must round-trip the verb endpoint. The
+      endpoint's response is authoritative; the optimistic update
+      reverts on rejection (with reason toast).
+    - **The "+" affordance** for creating a task on an empty column or
+      from the column header.
+    - **Empty / loading / error states** using UI2's canonical patterns.
+      Novel states (e.g. "no `agent-eligible` issues for your skills")
+      extend UI2's vocabulary in this issue's deliverable.
+
+    **Cross-track deps:** UI2 (design system).
+
+    **Soft input** from RD8 (agent-native UX patterns) for agent
+    presence on cards, if RD8 has closed by claim time. Per
+    kanban-worker SKILL.md, read RD8's handoff first if available.
+
+    **Output:** `docs/ui/0001-board-view.md` + wireframe.
+
+- id: UI4
+  track: ui
+  title: "Task detail side panel"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [UI2]
+  body: |
+    Specify the panel that opens when a card is clicked.
+
+    Cover:
+    - **Layout.** Pick one with rationale: overlay/sheet, push-content,
+      or modal. **Recommend push-content.** *Trade-off analysis:*
+      overlay/sheet (Linear, Asana style) preserves board visibility
+      but creates a focus-management problem when multiple cards are
+      clicked in succession (each opens a new sheet, stacking
+      complexity grows — UX, not implementation). Modal blocks board
+      context entirely and breaks drag-to-related-card workflows.
+      Push-content keeps the board visible to the left while giving
+      the detail panel room to render long bodies and threaded
+      comments. The agent claiming UI4 may override with rationale,
+      but the recommendation accounts for the most likely real
+      workflows.
+    - **Header.** Title, state badge, assignee avatar, primary action
+      button per state (claim if `ready`, complete if `in-progress`,
+      block if `in-progress`, unblock if `blocked`).
+    - **Body.** Rendered markdown.
+    - **Comments thread.** Standard comment list.
+    - **Handoff thread.** Separate from comments — uses UI7 renderer
+      for handoff cards (cross-issue reference; UI7 specifies the
+      renderer, UI4 specifies the thread layout).
+    - **Dependency mini-graph.** A small inline graph showing direct
+      parents and children only (full graph is UI5's component).
+    - **Action buttons by state.** Map state → allowed actions per
+      SPEC.md §Convention rules and API5's verb endpoints.
+    - **Empty / loading / error states** using UI2's canonical patterns.
+
+    **Cross-track deps:** UI2 (design system).
+
+    **Soft input** from RD8 (agent-native UX patterns) for agent action
+    attribution in comments and handoffs, if RD8 has closed by claim
+    time.
+
+    **Output:** `docs/ui/0002-task-detail.md` + wireframe.
+
+- id: UI5
+  track: ui
+  title: "Dependency graph visualization"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:research
+  depends_on: [UI2]
+  body: |
+    Specify the lightweight dependency graph component.
+
+    **Library research.** Compare candidates: Cytoscape.js, D3-force,
+    react-force-graph, vis.js. Pick on bundle size + license + interactive
+    capabilities + TypeScript support.
+
+    **Bundle size cap: graph component contributes <100KB to the
+    bundle.** The graph is lightweight (max ~30 visible edges per the
+    edge-hiding rule below); a heavyweight library like Cytoscape.js
+    (~500KB minified) is over-fit for this scope and likely fails the
+    cap. Recommend react-force-graph (~50KB) or a custom 200-line SVG
+    implementation as the realistic options.
+
+    Cover:
+    - **Force-directed layout.** Default settings + tuning notes.
+    - **Node rendering.** Issue title truncated, state color from UI2's
+      tokens, click → side panel (UI4 integration).
+    - **Edge rendering.** `blocks` solid, `tracks` dashed (matches D5's
+      `kind` enum).
+    - **Zoom / pan controls.** Standard.
+    - **Edge-hiding past 30 nodes.** Beyond ~30 visible nodes the graph
+      becomes visually unreadable; collapse distant edges into
+      "+N more" indicators that expand on demand.
+    - **Focus mode.** Click a node → highlight its lineage (ancestors
+      and descendants).
+    - **Empty / loading / error states** using UI2's canonical patterns.
+
+    **Cross-track deps:** UI2 (design system).
+
+    **Output:** `docs/ui/0003-dep-graph.md` + library decision with
+    bundle-size measurements.
+
+- id: UI6
+  track: ui
+  title: "Agent presence and real-time updates"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [UI2, API6]
+  body: |
+    Specify the live presence indicator on the board.
+
+    Cover:
+    - **Indicator format.** "Agent X working on Y" with timestamp;
+      avatar stacking when multiple agents are active on a project.
+    - **SSE event consumption.** Subscribes to API6's
+      `GET /v1/projects/:id/events` stream; consumes `agent.presence`,
+      `claim.created`, `claim.released` events. Debounce noise so the
+      UI surfaces meaningful state changes, not every micro-update.
+    - **Reconnection behavior.** SSE disconnect → poll fallback or
+      stale indicator on the board (decide which with rationale).
+    - **Expiry / TTL.** When an agent's last activity is >N minutes
+      ago, drop the presence indicator. N is configurable; recommend
+      5 min default to match the example cron cadence from SPEC.md.
+    - **Presence-disconnected state** as a novel UI state extending
+      UI2's vocabulary — banner across the top of the board with
+      reconnect indicator and last-known-good timestamp.
+    - **Empty / loading / error states** using UI2's canonical patterns.
+
+    **Cross-track deps:** UI2 (design system), API6 (SSE channel — the
+    event types and payload shapes are defined there).
+
+    **Soft input** from RD8 (agent-native UX patterns) for
+    presence-disorientation handling, if RD8 has closed by claim time.
+
+    **Output:** `docs/ui/0004-presence.md`
+
+- id: UI7
+  track: ui
+  title: "Handoff comment renderer"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [UI2]
+  body: |
+    Specify how handoff comments render in the comments / handoff
+    thread (UI4's container).
+
+    Cover:
+    - **Structured card** showing the parsed JSON metadata:
+      - `changed_files` as a file list with counts
+      - `verification` as a code-formatted list
+      - `residual_risk` as a warning-styled callout (UI2 token)
+      - `links` as clickable cards with URL preview where possible
+    - **Raw JSON expandable** for verification — clicking "show raw"
+      reveals the underlying ` ```handoff ` block as written.
+    - **Fallback rendering** when `parseHandoff` returns null: render
+      the raw markdown body of the comment with an "(unparseable
+      handoff)" annotation. The handoff format is the v0 spec,
+      byte-identical, and evolves additively, so v1 readers must
+      accept all v0 handoffs. UI7 is the v1-side reader implementing
+      this.
+    - **Empty / loading / error states** using UI2's canonical patterns.
+
+    Uses the v0 `parseHandoff` library directly — no UI-side parsing
+    variations.
+
+    **Soft pattern for import path** (decoupling from A2's timing):
+    UI7 may copy the v0 `parseHandoff` source into the v1 codebase with
+    a `// TODO(A2): replace with import once A2 settles import path`
+    comment. Once A2 closes, replace the copy with the agreed import.
+    The renderer logic itself is the load-bearing deliverable; the
+    import-path mechanics are mechanical follow-up.
+
+    **Cross-track deps:** UI2 (design system).
+
+    **Output:** `docs/ui/0005-handoff-renderer.md` + sample card mockup.
+
+- id: UI8
+  track: ui
+  title: "Project switcher and navigation chrome"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:writing
+  depends_on: [UI2]
+  body: |
+    Specify v1's application chrome.
+
+    Cover:
+    - **Project switcher.** Pick one with rationale: dropdown,
+      sidebar list, or command palette. Recommend command palette
+      (`⌘K`) — scales to many projects, matches developer tool
+      conventions.
+    - **Top nav.** Project name, search affordance, user menu, theme
+      toggle (dark/light per UI2).
+    - **Keyboard shortcuts.**
+      - `?` — help overlay
+      - `g p` — projects (or open switcher)
+      - `g i` — inbox / notifications
+      - `c` — create task
+      - Standard a11y shortcuts (Tab, Esc, arrow keys in lists)
+    - **Empty / loading / error states** using UI2's canonical patterns.
+
+    v1 is single-tenant by default — no cross-tenant switcher; the user
+    only sees projects within their tenant context.
+
+    **Cross-track deps:** UI2 (design system).
+
+    **Output:** `docs/ui/0006-chrome.md`
+
+# ============================================================
+# Research/docs track (9 entries)
+# ============================================================
+
+- id: RD1
+  track: research-docs
+  title: "v0 pain-point inventory (artifact-based)"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Inventory the friction points the v1 application must solve, drawn
+    from observable artifacts only.
+
+    **Sources (all paste-able / readable by the agent):**
+    - SPEC.md — the stated tradeoffs, constraints, and Open Questions
+    - PLAN.md — the documented risks, mitigations, and parallelization map
+    - This repository's own issues and PRs
+    - The conversation history that produced the v0 design (paste-able
+      by the project owner if not already in the repo)
+
+    **External user research (Cameron's deployment, demo-session
+    attendees, fork users) is explicitly out of scope for this issue.**
+    That work is RD1b, which is perma-deferred until v0 has deployed
+    users to interview.
+
+    Cover per pain-point:
+    - **(a) What the friction looks like in practice.** Concrete example
+      from the artifacts.
+    - **(b) Which v0 mechanism caused it.** Label confusion, manual
+      dependency walking pre-Action, handoff-format ambiguity, skill-
+      label coverage gaps, claim-race conditions, etc.
+    - **(c) What v1 would do differently.** Reference the relevant
+      v1 design decisions (recorded in the architecture-track ADRs and
+      pre-resolved entries throughout this roadmap) where applicable.
+    - **(d) Priority.** `must-fix-in-v1` / `nice-to-fix` / `defer-to-v1.5+`.
+
+    **Headline demo candidate.** Per PLAN.md, this issue is the
+    recommended target for the first IronClaw agent claim during the
+    demo session. The output is directly useful (drives v1 prioritization),
+    sized for one cron-tick, produces a citable handoff.
+
+    **Output:** `docs/research/0001-v0-pain-points.md`
+
+- id: RD1b
+  track: research-docs
+  title: "External user research from real v0 deployments"
+  labels:
+    - ready
+    - human-only
+    - skill:research
+  depends_on: []
+  body: |
+    External user research drawn from real v0 deployments — Cameron's
+    deployment, demo-session attendees, downstream forks of the kanban
+    template, anyone running the convention in production.
+
+    **Currently unclaimable in practice:** v0 has no deployed users at
+    issue-authoring time. This issue stays open as a placeholder until
+    v0 has been deployed and used by people other than the bootstrap
+    team for at least one project lifecycle.
+
+    When claimable:
+    - Conduct user interviews (semi-structured, 30–45 min each)
+    - Survey async users via a short questionnaire
+    - Synthesize findings into a v1.5 input document
+    - Compare against RD1's artifact-based inventory; flag deltas
+      (where artifacts predicted friction that didn't materialize, or
+      where users hit friction the artifacts didn't predict)
+
+    **`human-only` label** is a hard veto per SPEC.md §Convention Rule 6.
+    Agents skip this issue regardless of skill match. The work is
+    fundamentally human-driven — interview design, conversation
+    facilitation, qualitative synthesis.
+
+    **Output:** `docs/research/0001b-v0-user-research.md`
+
+- id: RD2
+  track: research-docs
+  title: "Competitive analysis: existing project boards"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Compare existing project board tools against v1's positioning.
+
+    **Tools to cover:** Linear, Notion, GitHub Projects, Plane, Trello,
+    Asana. Add others if the agent's research surfaces them as
+    relevant.
+
+    Per tool:
+    - **(a) What they do well.** Concrete features that v1 should
+      consider matching or beating.
+    - **(b) What they don't do well.** Friction points or absent
+      features.
+    - **(c) Where v1 is differentiated.** v1's positioning is
+      agent-native + GitHub-substrate-respecting + OSS-deployable.
+      Identify where each competitor falls short on at least one of
+      these axes.
+
+    **Output a "must match or beat" list per competitor** — two or
+    three features each that v1 should benchmark against.
+
+    Soft input to: any UI track issue (UI3–UI8) where competitive
+    parity matters, plus RD8 (agent-native UX patterns) for the
+    agent-handling subset.
+
+    **Output:** `docs/research/0002-competitive-analysis.md`
+
+- id: RD3
+  track: research-docs
+  title: "ADR: REST over GraphQL rationale"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Write the ADR documenting why v1 chose REST + OpenAPI over GraphQL.
+
+    The decision is already made — v1 uses REST + JSON + OpenAPI, not
+    GraphQL. This issue produces the permanent rationale doc that future
+    contributors read when they wonder why.
+
+    Cover:
+    - **(a) GraphQL's strengths and where they would benefit v1.**
+      Honest treatment — declarative client queries, single round-trip
+      for nested data, type-safe contracts. These are real advantages.
+    - **(b) Why those strengths don't outweigh the costs in v1's
+      context.** Self-host friendliness (no GraphQL server infrastructure
+      to run); GitHub-adjacent developer familiarity (REST is the
+      ambient default); simpler client implementations (fetch + JSON
+      vs Apollo / Relay / urql); easier debugging (curl works); OpenAPI
+      tooling ecosystem.
+    - **(c) What conditions would justify reconsidering.** v2 with a
+      complex client UX that hits the n+1 problem; an enterprise
+      customer requiring GraphQL contractually; etc.
+
+    **Output:** `docs/research/adr-0001-rest-over-graphql.md`
+
+- id: RD4
+  track: research-docs
+  title: "ADR: SSE over WebSockets rationale"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Write the ADR for v1's SSE choice. The decision is already made —
+    v1 uses Server-Sent Events for real-time updates, not WebSockets.
+    SSE is simpler to self-host and sufficient for kanban presence
+    indicators. This issue produces the rationale doc.
+
+    Cover:
+    - **(a) WebSockets' strengths.** Bidirectional, lower per-message
+      overhead, broader real-time use cases. Honest treatment.
+    - **(b) Why those strengths don't matter for kanban presence.**
+      Server-pushes-only — clients don't need a real-time channel back
+      to the server (claim/complete/etc. are HTTP verbs per API5).
+    - **(c) Self-host friendliness.** SSE works through standard HTTP
+      infrastructure (proxies, load balancers, CDNs); WebSockets often
+      need special proxy config (WS upgrade, sticky sessions). For
+      self-hosters this is a meaningful operational simplification.
+    - **(d) Reconnection semantics.** SSE has `Last-Event-ID` built in;
+      WS reconnection is application-level.
+    - **(e) What conditions would justify reconsidering.** Real-time
+      collaborative editing in v2; bidirectional client-server
+      streaming; etc.
+
+    **Output:** `docs/research/adr-0002-sse-over-websockets.md`
+
+- id: RD5
+  track: research-docs
+  title: "ADR: SQLite-default rationale"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Write the ADR for SQLite-default + Postgres-opt-in. The decision is
+    already made — v1 uses SQLite by default; setting `DATABASE_URL=postgres`
+    switches to managed Postgres without code changes. The portability
+    constraint that makes this seamless is documented in D6.
+
+    Cover:
+    - **(a) Self-host friendliness.** Zero-deps for solo deployers;
+      single-file database; backup is a file copy.
+    - **(b) Portable-schema constraint as engineering tax.** Per D6's
+      portability spec — what v1 gives up to keep both dialects working
+      (no JSONB-specific operators, no Postgres-only types, etc.).
+    - **(c) When Postgres is the right choice.** Multi-tenant deployments,
+      high-concurrency writes, advanced indexing (GIN, GiST), full-text
+      search beyond SQLite's FTS5 capabilities.
+    - **(d) The seamless DATABASE_URL switch.** What changes (zero
+      application code), what doesn't (Drizzle migration files run on
+      both).
+    - **(e) Migration thresholds.** Approximate data volume / concurrency
+      / feature requirements that suggest moving to Postgres.
+
+    **Output:** `docs/research/adr-0003-sqlite-default.md`
+
+- id: RD6
+  track: research-docs
+  title: "ADR: multi-tenancy-deferred rationale"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Write the ADR for single-tenant default + `MULTI_TENANT=true` flag.
+    The decision is already made — v1 ships single-tenant by default;
+    multi-tenant is a flag, off until ops explicitly opt in.
+
+    Cover:
+    - **(a) Engineering cost of correct multi-tenancy.** Auth isolation,
+      per-tenant billing, data export, support burden, noisy-neighbor
+      handling, per-tenant migrations. Months of work that has nothing
+      to do with whether the underlying coordination model is correct.
+    - **(b) Why v1 doesn't need it.** v1's job is validating the product;
+      validation doesn't require scale. Self-hosters and the bootstrap
+      project all run single-tenant.
+    - **(c) The deferred-but-not-blocked architecture.** `tenant_id`
+      reserved on every table from day one (D7's surface); schema
+      migrations are pure backfills when the flag flips on; auth and
+      isolation work concentrate at flag-flip time, not v1 ship time.
+    - **(d) What triggers flipping the flag.** Real demand from a
+      multi-tenant deployer paying for the feature, hosted-instance
+      launch, or strategic partnership requiring it.
+
+    **Output:** `docs/research/adr-0004-multi-tenancy-deferred.md`
+
+- id: RD7
+  track: research-docs
+  title: "ADR: GitHub-sync as first-class v1 feature"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:writing
+  depends_on: []
+  body: |
+    Write the ADR for GitHub-sync being in v1 (not deferred to v1.5+).
+    The decision is already made — GitHub-sync is bidirectional and
+    present in v1; sync-mode is not a post-launch feature.
+
+    Cover:
+    - **(a) The convention's installed base and migration path.** v0's
+      installed base lives on GitHub Issues with the kanban convention.
+      v1 inheriting that audience requires a migration path that doesn't
+      ask users to abandon their existing data.
+    - **(b) Why pure-app-only would abandon the convention's audience.**
+      The convention's durability commitment (per SPEC.md Objective)
+      explicitly says the convention persists alongside the app
+      indefinitely; v1 has to honor that.
+    - **(c) Engineering cost of bidirectional sync.** Webhook receiver
+      (API7 inbound), pull-mode cron worker (API7 outbound),
+      reconciliation algorithm, conflict resolution rules (INT7),
+      schema additions (D2's mode enum + INT7's authoritative_side
+      column).
+    - **(d) Why it's worth paying that cost in v1.** Sync-mode is the
+      load-bearing feature for adoption — without it, every existing
+      convention user has to abandon their data to try v1, which is
+      a non-starter.
+    - **(e) The convention persists indefinitely.** v1 is additive,
+      not a replacement. Pure-convention deployments must keep working
+      forever.
+
+    **Output:** `docs/research/adr-0005-github-sync-first-class.md`
+
+- id: RD8
+  track: research-docs
+  title: "Research: agent-native UX patterns"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:research
+  depends_on: []
+  body: |
+    Survey how existing tools handle AI-agent-as-user. v1 is agent-native
+    by positioning (per RD2's competitive analysis lens), so v1's UI
+    inherits the design challenges these tools have already faced.
+
+    **Tools to cover:** GitHub Copilot in PRs, Cursor in IDEs, Devin,
+    Claude Code, Aider, others if relevant.
+
+    Per tool:
+    - **(a) Identity surfacing.** Separate avatar / "by AI" badge / same
+      as humans / something else?
+    - **(b) Action attribution.** How agent actions are recorded in the
+      audit trail; whether undo affordances differ for agent vs human
+      actions; how blame / authorship is communicated.
+    - **(c) Disorientation handling.** What humans find disorienting
+      about working alongside agents (auto-modifications they didn't
+      see, agents that loop, attribution confusion) and how each tool
+      addresses it.
+    - **(d) v1 adoption recommendation.** Concrete UX guidance v1
+      should adopt.
+
+    **Soft input to UI3 (board view — agent presence on cards), UI4
+    (task detail — agent action attribution in comments and handoffs),
+    UI6 (presence indicator — disorientation handling).** Per the
+    kanban-worker SKILL.md guidance, agents claiming UI3 / UI4 / UI6
+    read RD8's handoff first if RD8 has closed by then.
+
+    **Output:** `docs/research/0003-agent-native-ux.md`
