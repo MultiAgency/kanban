@@ -182,14 +182,22 @@
 
 ## Wave 8 — Reactive substrate (v0.1.x)
 
-Deferred from v0.0.1 per SPEC.md §Deferred to v0.1 #6. Stub; full task breakdown happens in v0.1's planning pass.
+Deferred from v0.0.1 per SPEC.md §Deferred to v0.1 #6. Path 3 (HTTP webhook channel + adapter) is the chosen approach — path 2 (per-routine webhook endpoints) was empirically closed in v0.0.1 (daemon doesn't register HTTP routes for `trigger_type: webhook` routines).
 
-- [ ] **T8.1: Probe reactive-routine runtime registration**
-  - Acceptance: in a running ironclaw daemon, call `routine_create(trigger_type=webhook, path=/hooks/kanban-test, prompt="echo")` and observe the daemon log for `Registered ... HTTP endpoint path=/hooks/kanban-test` (analogous to the WASM channel endpoint registrations on startup)
-  - Verify: `curl -X POST https://ironclaw.multiagency.services/hooks/kanban-test -d '{}' ` returns a non-404 (job ID, 202, or HMAC error — anything but "no route" means the endpoint is live)
-  - Files: (none — operational; outcome drives whether v0.1 goes path 2 or path 3 per SPEC #6)
+- [x] **T8.1: Probe reactive-routine runtime registration** — _done in v0.0.1; outcome: path 2 closed._
+  Probe ran on a fresh ironclaw v0.28.0 daemon. `routine_create(trigger_type=webhook, prompt="echo")` accepted; `POST https://ironclaw.multiagency.services/hooks/kanban-test` returned 404; daemon startup showed no `Registered ... endpoint` lines for webhook-trigger routines. Recorded in `docs/ironclaw-tracer-outcome.md` and SPEC §6.
 
-- [ ] **T8.2: Wire GitHub webhook against the chosen path**
-  - Acceptance: a `ready`-label event on `MultiAgency/test` (or fork) fires the kanban-worker convention within seconds of GitHub's delivery; agent completes claim → work → handoff → close
-  - Verify: GitHub webhook delivery log shows 200 from IronClaw; routine run visible via `ironclaw routines history`; closed issue with parseable handoff per `tests/handoff.test.ts` pattern
-  - Files: `docs/routines/reactive.yaml.example` (graduate the "note" comment to "verified config" once path lands); `skills/kanban-worker/SKILL.md` (codify the chosen path); `README.md` (graduate the "deferred to v0.1" paragraph to a real setup section)
+- [ ] **T8.2: Enable IronClaw's HTTP webhook channel**
+  - Acceptance: `iclaw onboard --channels-only` selects HTTP webhook on port 8080; `HTTP_WEBHOOK_SECRET` is set in `~/.ironclaw/.env`; daemon restart logs `Webhook server listening on 0.0.0.0:8080` plus an endpoint registration for `/webhook`
+  - Verify: `curl -X POST http://localhost:8080/webhook -H "X-Webhook-Secret: <secret>" -d '{"user_id":"test","message":"ping"}'` returns `{"job_id":"<uuid>","status":"queued"}` (per IronClaw's HTTP webhook channel docs)
+  - Files: `~/.ironclaw/.env` (operational, not in repo)
+
+- [ ] **T8.3: GitHub → IronClaw adapter (Cloudflare Worker)**
+  - Acceptance: a Cloudflare Worker deployed against `ironclaw.multiagency.services` (or a subdomain) accepts GitHub's webhook payload (`{action, issue, ...}`), validates GitHub's `X-Hub-Signature-256` HMAC against the shared secret, transforms the payload to IronClaw's `{user_id: "github-webhook", message: <serialized event JSON>}` shape, and POSTs to IronClaw's `/webhook` with `X-Webhook-Secret`
+  - Verify: a synthetic GitHub `issues.labeled` payload posted to the Worker shows up as a job in IronClaw with a parseable JSON body in the agent's first message
+  - Files: a new repo (`MultiAgency/kanban-webhook-adapter` or similar) housing the Worker source + deploy config; reference link added to `README.md` and `docs/routines/reactive.yaml.example`
+
+- [ ] **T8.4: Wire GitHub webhook against `MultiAgency/test` (or fork) + verify end-to-end**
+  - Acceptance: GitHub webhook on the test repo points at the adapter's public URL; a `ready`-label event fires the kanban-worker convention within seconds; agent completes claim → work → handoff → close
+  - Verify: GitHub webhook delivery log shows 200 from the adapter; IronClaw routine history shows the corresponding run; closed issue has a parseable handoff matching the `tests/handoff.test.ts` pattern
+  - Files: `docs/routines/reactive.yaml.example` (graduate the "unverified" note to "verified config" once the path lands); `skills/kanban-worker/SKILL.md` (codify the adapter path); `README.md` (graduate the "deferred to v0.1" paragraph to a real setup section)

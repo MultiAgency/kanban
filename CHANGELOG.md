@@ -5,6 +5,54 @@ All notable changes to `MultiAgency/kanban` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v0.1
+
+Reactive substrate end-to-end. Delivers SPEC §Deferred to v0.1 #6.
+
+### What's new for fork users
+
+- **`worker/` Cloudflare Worker adapter** — translates GitHub `issues` webhook events into natural-language prompts the kanban-worker skill activates on, validates GitHub's `X-Hub-Signature-256` HMAC against `GITHUB_WEBHOOK_SECRET`, re-signs the forwarded body with `IRONCLAW_WEBHOOK_SECRET`, posts to IronClaw's HTTP webhook channel. ~120 lines TypeScript, no dependencies beyond Cloudflare Workers runtime. Setup in `worker/README.md`: `wrangler login` → two `wrangler secret put` calls → `wrangler deploy` → configure GitHub webhook with `Issues` event selected. Default deployment URL `kanban-webhook.<account>.workers.dev`; custom domain `kanban-webhook.<your-zone>` supported via the `[[routes]]` block in `wrangler.toml`.
+- **Reactive substrate is the canonical v0.1 deployment.** Cron substrate from v0.0.1 remains available as an opt-in alternative for fork users who want backlog-processing on a tick rather than event-driven response. Both substrates share the same kanban-worker skill and same convention rules; the substrate is where the agent learns about new work, not how the agent operates on it.
+- **Per-event latency:** sub-second at the substrate layer (Worker forwards in 50–140ms, IronClaw queue-to-agent-pickup ~5s). Total wall-clock label-to-issue-close on the v0.1 demo (`MultiAgency/test#9`): ~1m 25s, most of which is the agent doing the work.
+
+### What this validates
+
+Per `docs/ironclaw-tracer-outcome.md` Phase 9 (added in this release): a `ready`-label event on `MultiAgency/test#9` fired the kanban-worker convention end-to-end — claim ritual via http, README update via `github.create_or_update_file`, handoff comment, close — all autonomous, no human in the loop, in ~85 seconds.
+
+The structural failure modes that surfaced in v0.0.2's cron substrate (placeholder-substitution leakage, multi-step discovery state loss — see Findings 21, 26) **do not manifest under webhook delivery**. The trigger payload identifies the work up front, so no state to lose across multi-step tool sequences.
+
+### Versioning
+
+Use `MultiAgency/kanban@v0` for latest-within-major. Pin to `@v0.1.0` once tagged for stability. The `v0` floating tag moves with each release; `v0.1.0` itself will be immutable.
+
+## [Unreleased] — v0.0.2
+
+Operational hardening based on the first sustained autonomous-loop runs against the v1 roadmap. v0.0.1 proved the convention works for an interactive agent closing a real issue end-to-end; v0.0.2 hardens it for the case where the agent is cron-driven, alone, and overnight.
+
+### What's new for fork users
+
+- **SKILL.md "Execute, don't just draft" rule** — explicit guidance that drafting the work in reasoning is not the same as posting it via API. Half-states from agents that compose a comment in their head but never invoke the http tool are now an explicit failure mode the canonical skill warns against. Ships with the skill, so every fork inherits the rule.
+- **`docs/maintenance.md` daemon-vs-interactive runbook** — the two-mode port-8080 collision is documented with the rename-the-plist recovery pattern. `launchctl unload -w` does not always persist across system events; renaming `~/Library/LaunchAgents/com.ironclaw.daemon.plist` is the reliable defense.
+- **`docs/ironclaw-tracer-outcome.md` Recovery playbooks section** — the F12c + UNIQUE-constraint + F13 compound failure (broken GitHub credentials that survive `ironclaw tool auth github` because the secret-store write silently no-ops on conflict) now has a documented sequential recipe: inspect the `secrets` table, `DELETE` stale rows, re-auth with the env-var path, accept the F13 "Save anyway?" prompt.
+- **`README.md` web-gateway section** — documents the `http://127.0.0.1:3000/` interaction surface for the running daemon. When `iclaw` errors with `Another IronClaw instance is already running`, the gateway lets you interact with the existing productive process instead of killing it.
+
+### Findings recorded against IronClaw v0.28.0
+
+Eight new findings in [`docs/ironclaw-tracer-outcome.md`](docs/ironclaw-tracer-outcome.md):
+
+- **Finding 20** — `openai/gpt-oss-120b` (via NEAR AI) drops tool-call format on large POST body (~15K+ chars). Mode lapses from structured-output to plain text mid-call. Workaround: relay agent content via `gh issue comment` from the IronClaw conversation DB. (Includes an explicit attribution correction: originally pinned on Qwen 3.5 122B before the active model was verified to be `openai/gpt-oss-120b`. Mechanism unchanged.)
+- **Finding 21** — Cron-fired routine runs less reliable than interactive runs under the same prompt; cold-start context surfaces pathological tool selection. Mitigated by switching the routine's `action_type` from `lightweight` to `full_job` and making the prompt explicit about tool mapping.
+- **Finding 22** — T7.1 banked at three escalating tiers of evidence (synthetic-seed smoke test → research synthesis on `MultiAgency/kanban` → architectural decision ADR on the canonical roadmap). Evidence-banking entry that sharpens the outcome doc's confidence claim.
+- **Finding 23** — IronClaw's bundled `github` WASM tool's action enum lacks convention-primitive actions (`add_assignees`, `add_labels`, `remove_label`, `update_issue`). Routine agents default to it and fail the claim ritual. Workaround: routine prompt directs the agent to use the `http` tool for claim-ritual operations; the `github` tool is fine for `list_issues`, `get_issue`, `create_issue_comment`, `create_or_update_file`.
+- **Finding 24** — `full_job` action_type + `sandbox.enabled=true` successfully writes repo files via `create_or_update_file`. Addresses the file-commit residual_risk from F22 tier-3 (#1's Hono ADR closure had to graduate from comment-body to file via human relay). First agent-authored repo file landed via this path: `docs/adr/0005-ui-bundler.md`.
+- **Finding 25** — Setting `action_type=full_job` via DB edit without the required action_config fields (`title`, `description`, `max_iterations`) breaks the routines table deserialization. `ironclaw routines list` errors and **no routines fire** until the row is repaired. Mitigation: revert action_type to `lightweight` first, then re-do the migration with both fields together.
+- **Finding 26** — `openai/gpt-oss-120b` emits template-variable placeholders (`<SELECTED_ISSUE>`, `<SELECTED_ISSUE_NUMBER>`) as literal tool args. The github WASM tool's strict input typing rejects these (fail-closed); the `http` tool's permissive typing forwards them to GitHub (fail-as-404 reported as `success=1`). Manifests under multi-step procedural cron prompts; sidestepped by the webhook substrate where the trigger payload carries the issue identifier directly.
+- **Finding 27** — IronClaw's HTTP webhook channel uses `X-Hub-Signature-256` HMAC (the same scheme GitHub uses for its outbound webhooks), not a shared-secret header. Docs reference `X-Webhook-Secret` but the runtime requires the HMAC-signed body. Body schema is `{user_id, content}`, not `{user_id, message}` as some docs imply.
+
+### Versioning
+
+Use `MultiAgency/kanban@v0` for latest-within-major. Pin to `@v0.0.2` once tagged for stability. The `v0` floating tag moves with each patch; `v0.0.2` itself will be immutable.
+
 ## [v0.0.1]
 
 First immutable patch in the v0.x line.

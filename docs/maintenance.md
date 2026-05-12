@@ -42,3 +42,39 @@ Inline code spans don't help — the regex is bare-token-based and doesn't care 
 Inside `## Parents` sections, leave mnemonics as-is — that's where the substitution does exactly what you want.
 
 The cosmetic anomaly was observed during Phase 4 (the bulk push of 44 v1 roadmap issues). D2's INT7-marker callout shipped as `**(#27 marker)**` — link works, marker prose lost. Not fixed retroactively (44 live issues, not worth the regression risk), but flagged here for next-edit discipline.
+
+## Daemon vs interactive: pick one per session
+
+IronClaw runs in two modes that cannot coexist on the same machine:
+
+- **Daemon mode** — `ironclaw` is supervised by launchd (plist at `~/Library/LaunchAgents/com.ironclaw.daemon.plist`), always-on, receives webhook events via the tunnel configured in `tunnel.public_url`. Suitable for production webhook intake where events arrive asynchronously.
+- **Interactive mode** — `iclaw` launched in a foreground terminal, REPL-style. User types prompts and watches the agent execute synchronously. Suitable for one-off agent runs, debugging, and the kind of work the kanban-worker SKILL is designed for.
+
+Both modes bind port 8080 (the `channels.http_port` config value). Trying to run both simultaneously fails — whichever started second errors with `Address already in use`.
+
+**Choose one explicitly at session start.**
+
+For an interactive session, take the daemon offline first:
+
+```bash
+# Recommended: rename the plist to prevent any launchd respawn.
+mv ~/Library/LaunchAgents/com.ironclaw.daemon.plist \
+   ~/Library/LaunchAgents/com.ironclaw.daemon.plist.disabled
+pkill -9 ironclaw
+iclaw
+```
+
+Renaming is more reliable than `launchctl unload -w` — the `-w` flag's documented persistence guarantee has been observed to lapse mid-session, with launchd respawning the daemon under PID 1 unprompted. Renaming the plist removes it from launchd's view entirely until the rename is undone.
+
+For daemon mode, ensure no foreground `iclaw` is running:
+
+```bash
+pkill -9 ironclaw
+# Restore the plist if previously disabled:
+mv ~/Library/LaunchAgents/com.ironclaw.daemon.plist.disabled \
+   ~/Library/LaunchAgents/com.ironclaw.daemon.plist 2>/dev/null
+launchctl load -w ~/Library/LaunchAgents/com.ironclaw.daemon.plist
+# Prompts now route to the daemon via the configured tunnel URL.
+```
+
+**Observed during v0 agent runs:** roughly 15 minutes lost to fighting daemon respawns when the intent was interactive — port 8080 stayed bound, fresh `iclaw` invocations errored on bind, killing the process produced a new launchd-spawned successor PID. Renaming the plist was the only intervention that held.

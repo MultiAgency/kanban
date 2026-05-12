@@ -1,0 +1,14 @@
+name = "kanban-webhook"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+
+# Non-secret env vars. Secrets are set via `wrangler secret put` (see README.md).
+[vars]
+IRONCLAW_WEBHOOK_URL = "https://ironclaw.multiagency.services/webhook"
+
+# Custom domain — assumes `multiagency.services` is on Cloudflare and the zone
+# is in the same account this Worker deploys to. Comment this out and use the
+# default `*.workers.dev` URL if the zone isn't set up yet.
+# [[routes]]
+# pattern = "kanban-webhook.multiagency.services/*"
+# custom_domain = true

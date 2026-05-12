@@ -181,6 +181,57 @@ Distinguished from Phase 6 by **substrate and substance**: Phase 6 ran on `Multi
 
 **What this proves:** the convention isn't ceremonial. An agent claimed and closed a real v1 roadmap issue on the bootstrap project, producing genuine v1 design input (15 specific pain points with priorities + mitigations) consumable by the next planning session. The bootstrap-on-itself loop works.
 
+### Phase 8 — Agent-authored repo files via cron substrate (new evidence tier)
+
+**Severity:** partial — first end-to-end agent-authored file commit on the canonical repo. Convention pipeline produces a real `docs/adr/` artifact via `create_or_update_file`; claim ritual + close step blocked by the github WASM tool's missing primitives (see F23). Workaround via the `http` tool is queued for the next routine-prompt iteration.
+
+**Distinguished from prior evidence tiers:** Phases 6 and 7 produced agent-authored content as **issue comments** (handoff body, synthesis content). Tier-3 evidence (#1's Hono ADR) explicitly noted the file-commit gap as `residual_risk` and required human relay to graduate the comment-body content to a tracked file at `docs/adr/0001-web-framework.md`. Phase 8 is the first session where the agent committed a tracked file at a stable git path **autonomously**, without human relay.
+
+**Issue:** [#46 — ADR: v1 UI bundler (rsbuild)](https://github.com/MultiAgency/kanban/issues/46).
+
+**Pipeline outcome (cron-fired tick under `action_type=full_job` + `sandbox.enabled=true`):**
+
+- [x] List candidate issues — `github(action=list_issues, labels=ready,agent-eligible)` returned 20 candidates, agent picked #46.
+- [x] Read issue body — `github(action=get_issue)` returned the full body with the rsbuild ADR specification.
+- [ ] Self-assign — **failed.** `github(action=add_assignees)` doesn't exist (F23). Agent attempted, error returned the action enum; tried `add_labels` next, same gap.
+- [ ] Label swap — **failed.** Same root as above; `add_labels` and `remove_label` not in the github WASM tool's action enum.
+- [x] Substantive work — agent drafted the full ADR (Status / Context / Decision / Rationale / Comparison Table / Rejected Alternatives / Consequences / References) for rsbuild vs Vite vs Webpack.
+- [x] **File commit — succeeded.** `github(action=create_or_update_file, path=docs/adr/0005-ui-bundler.md, content=<full ADR>)` landed the file at the expected path on the canonical repo. **First agent-authored repo file on `MultiAgency/kanban`.**
+- [x] Handoff comment — `github(action=create_issue_comment)` posted a structured handoff referencing the new file.
+- [ ] Close — **failed.** `github(action=update_issue, state=closed)` doesn't exist either; same root as F23.
+
+**Manual cleanup post-tick:** the issue was retroactively claimed (assignee + label swap) and closed by hand to match what the agent should have done; an explanatory comment on the issue references F23 and the routine-prompt iteration that adds the `http`-tool workaround for these primitives.
+
+**What this proves:** the convention's "agent produces real v1 deliverable" claim now has **physical evidence in the repo** at a tracked git path, not just comment bodies. `git show HEAD:docs/adr/0005-ui-bundler.md` returns the file. This is qualitatively different from prior evidence tiers and is the foundation the v0.1 reactive substrate is meant to make routine. Once F23 is worked around (Path A) or fixed upstream (Path B), every cron tick on a `ready+agent-eligible+skill:writing` issue can produce a similar artifact + closure.
+
+### Phase 9 — Reactive substrate via webhook (v0.1 thesis materialized)
+
+**Severity:** complete — SPEC §Deferred to v0.1 #6 banked. The convention's first end-to-end agent-driven closure via a real GitHub event (not cron, not interactive REPL).
+
+**Substrate:** GitHub webhook → Cloudflare Worker (`worker/`) → IronClaw HTTP channel. Worker validates GitHub's `X-Hub-Signature-256` HMAC, translates `{action, issue, ...}` events into a natural-language prompt the kanban-worker skill activates on, re-signs the body with IronClaw's secret, forwards to `https://ironclaw.multiagency.services/webhook`.
+
+**Issue:** [`MultiAgency/test#9`](https://github.com/MultiAgency/test/issues/9) — "v0.1 reactive substrate smoke test."
+
+**Timeline (per GitHub's webhook-delivery dashboard + the issue's event log):**
+
+- **T+0** — issue created with `ready` + `agent-eligible` + `skill:writing` labels. GitHub fires `opened` + `labeled` events.
+- **T+0.05–0.14s** — Worker accepts both deliveries (HTTP 200), filters for actionable claim event, translates to prompt, forwards to IronClaw.
+- **T+~5s** — IronClaw queues the agent job.
+- **T+~65s** — Agent issues claim ritual via http tool: `PATCH .../assignees`, `POST .../labels`, `DELETE .../labels/ready` — all succeed. Issue transitions to `in-progress` with `@jlwaugh` assignee.
+- **T+~80s** — Agent commits `README.md` update via `github.create_or_update_file`. Posts handoff comment via `github.create_issue_comment`. Closes issue via http `PATCH` with `state=closed, state_reason=completed`.
+- **T+1m 25s** — Issue closed. `closedAt: 2026-05-12T02:59:15Z`.
+
+**Per-event latency at the substrate layer:** sub-second. Worker processing under 200ms; IronClaw queue-to-agent-pickup under 5s.
+
+**What's verified that wasn't before:**
+
+- Real GitHub events drive the convention pipeline (vs cron's "agent finds an issue" loop).
+- The structural failure modes from Phase 8 (placeholder substitution leak, multi-step discovery state loss) **don't manifest under webhook delivery** — the trigger payload identifies the work up front, so no state to lose across rounds.
+- The `http`-tool workaround for F23 (github WASM missing convention primitives) integrates cleanly with webhook-driven invocations.
+- The `worker/` adapter is the recommended path for fork users adopting the reactive substrate.
+
+**Residual quality issue:** the handoff comment format drifted on this fire — agent posted bare JSON (`{"type":"handoff","changed_files":["README.md"]}`) instead of the canonical `**Handoff:** <summary>` + fenced ` ```handoff ` block per `docs/handoff-format.md`. `parseHandoff` would return null on this body. The substantive work landed correctly (`README.md` updated, issue closed) but the handoff envelope didn't match spec. Worth a future SKILL.md tightening to enforce the bold-prefix + fenced-block shape.
+
 ## Findings
 
 ### Finding 1: No Apple Silicon binary in the IronClaw release artifacts
@@ -482,7 +533,307 @@ The "blocked on Finding 11" framing that drove deferral language elsewhere in th
 - **Mitigation upstream:** populate the function's `parameters` JSON Schema from either (a) the WASM tool's exported `schema()` function, or (b) the `discovery_summary` in `capabilities.json` (at minimum surface `always_required` and the action name enum). Without this, every WASM tool with multiple actions is unusable to the LLM without an out-of-band prompt nudge.
 - **Workaround for the kanban demo:** bypass the WASM tool entirely. The built-in `http` tool has a typed schema, accepts arbitrary headers (so credentials can be injected explicitly via `Authorization: Bearer <PAT>`), and worked end-to-end for the watched demo — at the cost of putting the PAT in the conversation context, which is fine for a one-shot demo but not for production routines.
 
+### Finding 20: `openai/gpt-oss-120b` (via NEAR AI) drops tool-call format mid-call on large POST body
+
+> **Attribution correction.** This finding was originally attributed to "Qwen 3.5 122B" based on a stale assumption about which model was active. The actual model in use at the time of the observed failures was `openai/gpt-oss-120b` served via NEAR AI Cloud (verified after the fact via `ironclaw config get selected_model`). The mechanism description below is unchanged; only the model name and any upstream-filing implications shift.
+
+**Symptom:** Agent successfully completes preceding small-body tool calls (read context, atomic claim ritual — each PATCH/POST/DELETE with kilobyte-scale arguments), then emits the rationale for the next tool call (e.g., "Now I'll generate the comprehensive skeleton spec and post it as a comment") and produces the large body content as **plain assistant text** rather than as the tool call's `body` argument. The structured-output mode lapses mid-call.
+
+**Observed:** Issue #45 (Hono application skeleton spec). Agent executed 7 tool calls cleanly (4 context-reading GETs + 3-step claim ritual PATCH/POST/DELETE), then turn0_7 emitted the POST-comment rationale and a 15,840-character assistant message containing the substantive spec — but the tool call's `result` was empty (no API call actually fired). From the kanban's perspective, the issue stayed in `in-progress` with no handoff comment posted — a half-state per Rule 2. Reproduced across two separate attempts on the same issue.
+
+**Likely mechanism:** Mode switch from "many small structured tool calls" to "single large content tool call" exceeds the model's reliability threshold for maintaining structured-output format. The model's output drifts back to natural-language generation mid-call. The threshold is empirically somewhere between the claim-ritual call sizes (~hundreds of bytes) and the spec POST body (~15K bytes); the exact boundary is not measured.
+
+**Tonight's mitigation:** Salvage the agent's content from the IronClaw `conversation_messages` table and relay via `gh issue comment` with an attribution prefix (a "relay note" naming the failure mode and clarifying that the substantive work is the agent's, the relay is mechanical). Issue #45's [spec comment](https://github.com/MultiAgency/kanban/issues/45#issuecomment-4426186125) was relayed this way; the convention's "agent produces real artifacts" property stands; the property that drops is "agent operated the GitHub API end-to-end for this issue."
+
+**Structural mitigations for v0.1 substrate work:**
+
+- **Model selection.** Try Claude or GPT-4 (both have stronger tool-call format adherence at large bodies in prior observation). Add to v0.1 model-evaluation backlog. Track the body-size threshold per model.
+- **Body-size guard in `kanban-worker` skill.** Detect "about to POST ≥ ~8K chars" and split the work into multiple smaller comments (e.g., post sections incrementally, then a summary comment linking them). The convention permits multi-comment delivery as long as the handoff fence is the parser anchor.
+- **Prompt structure.** Explicitly instruct: "Place the spec content inside the `body` argument of an http POST tool call. Do not emit the spec as response text — that produces a half-state. If the body would exceed 8000 characters, split into multiple POSTs." May or may not work depending on model instruction-following under load; the SKILL.md "Execute, don't just draft" update is a step in this direction but doesn't address the size threshold specifically.
+- **Upstream filing.** Worth a one-liner to NEAR AI Cloud about the failure mode, ideally with reference to the upstream `openai/gpt-oss` repository so the model maintainers see it. Not urgent — workaround is known.
+
+**Salvage playbook** (when this recurs):
+
+```bash
+# 1. Find the conversation ID for the failed run
+sqlite3 ~/.ironclaw/ironclaw.db "SELECT id, started_at, last_activity FROM conversations WHERE channel='tui' ORDER BY last_activity DESC LIMIT 3"
+
+# 2. Extract the assistant message containing the dropped tool-call body
+sqlite3 ~/.ironclaw/ironclaw.db \
+  "SELECT content FROM conversation_messages WHERE conversation_id='<id>' AND role='assistant' ORDER BY created_at DESC LIMIT 1" \
+  > /tmp/agent-content.md
+
+# 3. Strip the leading rationale line if present (e.g., "Now I'll generate...")
+sed -i '' '1,/^$/d' /tmp/agent-content.md   # macOS sed; drops up to first blank line
+
+# 4. Prepend a relay note documenting the failure mode and attribution.
+# 5. Post via gh issue comment, capture the comment URL for the handoff.
+# 6. Post the handoff comment (also relayed if the model dropped that too).
+# 7. Close the issue with --reason completed.
+```
+
+This Finding's [residual_risk](https://github.com/MultiAgency/kanban/issues/45#issuecomment-4426187833) is recorded as part of issue #45's handoff.
+
+### Finding 21: Cron-fired routine runs are less reliable than interactive runs under the same prompt
+
+**Symptom:** A cron-scheduled IronClaw routine running the kanban-worker convention produces inconsistent behavior across fires. Same prompt, same model, same skill set, same target repo — but ~33% of fires drift into pathological tool selection (in the observed case, calling `tool_search` with an absurdly enumerative ~200-label skill query) instead of the obvious `http GET /issues?labels=ready+agent-eligible` path the prompt invites.
+
+**Observed setup:**
+
+- Routine: `kanban-tick` (cron `0 */5 * * * *`, action_type `lightweight`, `max_tokens: 8192`, `max_tool_rounds: 30`).
+- Prompt: *"Follow the kanban-worker convention on MultiAgency/kanban. Find one ready+agent-eligible issue you are qualified for by skill match. Walk Rule 6 four-condition eligibility. If green, perform Rule 2 atomic claim, do the work substantively, post a handoff comment, then close the issue. If no eligible issue is available, exit cleanly."*
+- Three sequential fires under interactive load (user was simultaneously working on #1, #13, #45 in the TUI channel): 00:00 ok 27K tokens, 00:05 **attention** 39K tokens, 00:12 ok 27K tokens.
+
+**The "attention" run:** Agent's first tool call was `tool_search` with `query: "MultiAgency/kanban issues ready agent-eligible skill:code skill:review skill:writing skill:research skill:translation skill:debugging skill:test ..."` enumerating roughly 200 skill labels (most of which don't exist in the project's canonical label set — see `.github/labels.yml`, which defines five `skill:*` labels). The model appears to have interpreted "find an issue by skill match" as "search for the right tool by enumerating every conceivable skill name." Tool-search is the wrong tool for this task — `http GET /issues?labels=ready,agent-eligible` is the direct path. The misuse burned ~12K extra tokens vs the "ok" runs without progressing the task.
+
+**Likely mechanisms:**
+
+- **Cron-fired prompts run in a less-grounded context than interactive prompts.** Interactive runs come with the user's conversational scaffolding (prior turns, error correction, follow-ups). Cron-fired runs are cold-start — the model sees only the static prompt and has to bootstrap intent inference from a single message. Edge cases and pathological tool selection are more likely.
+- **Same underlying tool-call drift as Finding 20.** `openai/gpt-oss-120b` (via NEAR AI) has observable reliability issues in structured output. Different load shapes (large body content vs cold-start prompt) surface different failure modes of the same underlying instability.
+- **Routine action_type `lightweight` may reduce context further.** The `lightweight` action config trims skill/context loading relative to full agent runs — the agent may not have the kanban-worker SKILL.md fully in context when firing.
+
+**Tonight's mitigation:** Disable the routine while doing interactive work. Cron fires compete for token budget and produce noise that obscures interactive-run signals. Re-enable when interactive sessions are quiet and the convention's autonomous-loop property is what's being tested.
+
+Disable in DB:
+
+```bash
+sqlite3 ~/.ironclaw/ironclaw.db "UPDATE routines SET enabled=0 WHERE name='kanban-tick'"
+```
+
+Re-enable: same query, `enabled=1`. Or via the IronClaw CLI if a `routine enable/disable` subcommand exists (not verified in v0.28.0).
+
+**Structural mitigations for v0.1 substrate work:**
+
+- **Add a routine prompt template to `docs/routines/`.** The current prompt is human-friendly prose; a more agent-friendly version would name the exact first tool call: *"Your first action is `http GET https://api.github.com/repos/MultiAgency/kanban/issues?labels=ready,agent-eligible&state=open&per_page=30`. Inspect the returned issues for skill match. If none match your installed skills, exit. Otherwise, proceed to the claim ritual."* Removes the "what tool do I use" decision the model is getting wrong.
+- **Re-evaluate `lightweight` action_type.** If routine fires need the kanban-worker SKILL.md in context, `lightweight` may be the wrong action mode. `worker` mode (the default for non-lightweight) loads more skill context and may produce more reliable runs at higher token cost.
+- **Track routine success rates per model.** v0.1 model evaluation should include cron-fired routine behavior, not just interactive prompt behavior. Different models likely have different reliability profiles for cold-start agent runs.
+- **Document the routine-disable-during-interactive-work pattern in `docs/maintenance.md`.** Cron-fired routines firing in parallel with interactive sessions is the v0 default configuration but the failure-mode interaction (routine noise overlapping interactive signals) is not currently flagged.
+
+**Observed run record:**
+
+```
+routine: kanban-tick (id 341c0074-5ba1-4743-a8a6-956a6684bb5e)
+2026-05-12T00:00:04Z  ok         27,048 tokens (exited cleanly — no eligible issue)
+2026-05-12T00:05:34Z  attention  38,990 tokens (tool_search misfire on enumerative query)
+2026-05-12T00:12:34Z  ok         27,410 tokens (exited cleanly — no eligible issue)
+```
+
+### Finding 22: T7.1 banked at three escalating tiers of evidence
+
+**Not a bug; an evidence-banking entry to sharpen the outcome doc's confidence claim.**
+
+T7.1 ("one IronClaw agent closes a real issue end-to-end with parseable handoff") has now been demonstrated three times under the kanban-worker convention, each more substantive than the last:
+
+1. **Tier 1 — synthetic-seed smoke test** (2026-05-10, `MultiAgency/test#1`). Issue body was deliberately small ("write a one-paragraph hello-world response"). Demonstrated the convention pipeline mechanics (skill activation, Rule 6 eligibility, Rule 2 atomic claim, Rule 4 handoff format, close) on a private test repo. Recorded in Phase 6 above.
+2. **Tier 2 — research synthesis** (2026-05-10, `MultiAgency/kanban#36` "v0 pain-point inventory"). Substantive enough to require real research output but not architectural; produced a structured findings comment with no permanent repo artifact required.
+3. **Tier 3 — architectural decision on canonical roadmap** (2026-05-11, `MultiAgency/kanban#1` "ADR: v1 web framework (Hono)"). Agent produced a full ADR with Status / Context / Decision / Rationale (broken down by all six criteria from the issue body) / criteria-comparison table / rejected-alternatives one-paragraph each / consequences / references. The handoff JSON parses cleanly; `residual_risk` explicitly acknowledges the v0 limitation that prevented committing the file directly (sandbox-disabled). The ADR was subsequently graduated from comment-body to `docs/adr/0001-web-framework.md`.
+
+**Distinguishing detail:** all three ran on the same kanban-worker SKILL.md and the same convention rules. The tier ladder is about *issue substance*, not about convention surface area. The convention is substrate-agnostic and contribution-shape-agnostic — it handles a smoke-test seed and a substantive ADR with the same six rules.
+
+**Implication for v0.1+ planning:** the convention's load-bearing claim ("agents produce real shared-board value, not just demos") is now defended at three tiers including the architectural-decision tier on the canonical roadmap. Subsequent evidence-banking should pick issues that exercise *failure modes* (eligibility veto via `human-only`, parent-promotion via the Action, cross-agent handoff chain) rather than just adding more tier-3 examples.
+
+### Finding 23: github WASM tool missing convention primitives (`add_assignees`, `add_labels`, `remove_label`, `update_issue`)
+
+**Symptom:** During the first cron-fired tick under `action_type=full_job` + `sandbox.enabled=true`, the agent successfully called `list_issues`, `get_issue`, `create_or_update_file`, and `create_issue_comment`, but failed on `add_assignees`, `add_labels`, and `remove_label` with:
+
+```
+Sandbox error: Tool error: Invalid parameters: unknown variant `add_assignees`,
+expected one of `get_repo`, `create_repo`, `list_issues`, `create_issue`,
+`get_issue`, `list_issue_comments`, `create_issue_comment`, `list_pull_requests`,
+`create_pull_request`, `get_pull_request`, `get_pull_request_files`,
+`create_pr_review`, `list_pull_request_comments`, `reply_pull_request_comment`,
+`get_pull_request_reviews`, `get_combined_status`, `merge_pull_request`,
+`list_repos`, `search_repositories`, `search_code`, `search_issues_pull_requests`,
+`list_branches`, `create_branch`, `get_file_content`, `create_or_update_file`,
+`delete_file`, `list_releases`, `create_release`, `trigger_workflow`,
+`get_workflow_runs`, `fork_repo`, `handle_webhook`
+```
+
+The github WASM tool's action enum has 32 entries covering repos, issues, PRs, files, releases, and workflows — but **no label management, no assignee management, no issue state changes**. The convention's load-bearing primitives (Rule 2 atomic claim ritual = self-assign + label swap; close-the-issue at completion) are physically impossible via the github WASM tool alone.
+
+**Path A — workaround (immediate, in-scope for v0.1 reactive substrate):** use IronClaw's built-in `http` tool to call GitHub's REST API directly for these operations. The `http` tool already has credential injection via the bound PAT; it's been used successfully throughout the tracer for non-WASM paths (yesterday's T7.1 demo, today's #1 ADR closure). Concretely:
+
+- Self-assign: `PATCH /repos/{owner}/{repo}/issues/{N}` with body `{"assignees": [<your-handle>]}`
+- Add label: `POST /repos/{owner}/{repo}/issues/{N}/labels` with body `{"labels": ["in-progress"]}`
+- Remove label: `DELETE /repos/{owner}/{repo}/issues/{N}/labels/ready`
+- Close: `PATCH /repos/{owner}/{repo}/issues/{N}` with body `{"state": "closed", "state_reason": "completed"}`
+
+The order matters for the claim ritual: add-then-remove on labels (matches the `promote()` order from the v0 Action's I2 fix — recoverable both-labels state preferred over invisible-no-labels state on partial failure).
+
+**Path B — upstream fix (structural, parallel to F13/F14/F18/F19):** file a PR adding `add_assignees`, `remove_assignees`, `add_labels`, `remove_label`, `set_labels`, and `update_issue` (with at minimum `state` + `state_reason` + `title` + `body` + `assignees` + `labels` fields) to the github WASM tool's action enum. This makes the convention's claim ritual + close pipeline executable via the WASM substrate without falling back to `http`. Belongs on the same v0.1 upstream-PR backlog as F13/F14/F18/F19.
+
+Both paths should land. Path A unblocks the reactive substrate in tonight's session; Path B fixes the structural gap so future fork users don't need the workaround.
+
+### Finding 24: `full_job` + `sandbox.enabled=true` successfully writes repo files via `create_or_update_file`
+
+**Symptom (positive):** Under `action_type=full_job` with `sandbox.enabled=true` and Docker daemon running, the agent successfully invoked `github(action=create_or_update_file, owner=MultiAgency, repo=kanban, path=docs/adr/0005-ui-bundler.md, message=..., content=<full ADR>)` and the file landed in the repo at the expected path (4582 bytes, agent-authored).
+
+**Significance:** This addresses the residual_risk from F22 tier-3 (#1's Hono ADR closure earlier today), which read: _"Sandbox-disabled prevents committing docs/adr/0001-web-framework.md directly; comment-on-issue is the v0 alternative."_ Under `full_job + sandbox.enabled=true`, the sandbox path is open and `create_or_update_file` works end-to-end. The ADR for #46 (rsbuild) was the first agent-authored repo file landed via this path on the canonical roadmap.
+
+**Required configuration for `full_job`:** The `routine_create` tool's CLI doesn't expose all required `action_config` fields. Setting `action_type=full_job` via direct DB edit must include in `action_config`:
+
+- `title` (string, required) — used as the job's title; suggested: routine name plus context, e.g. `"kanban-tick autonomous claim"`
+- `description` (string, required — NOT `prompt`) — the procedural instructions for the agent. Replaces the lightweight-mode `prompt` field.
+- `max_iterations` (integer, required, 1–200) — replaces lightweight's `max_tool_rounds`. Default 25; bumping to 30 gives modest headroom.
+
+`full_job` ignores lightweight-only fields (`use_tools`, `max_tool_rounds`, `context_paths`). Setting `action_type=full_job` without these required fields makes the entire routines table fail to deserialize on the next `routines list` (cron scheduler stops firing all routines until the row is fixed). See F25 below for that gotcha.
+
+### Finding 25: Setting `action_type=full_job` via DB edit without required fields breaks routine scheduler globally
+
+**Symptom:** Updating the routines table to set `action_type='full_job'` while leaving the existing lightweight `action_config` shape (with `prompt`, `max_tokens`, `max_tool_rounds`, `use_tools`) in place produces:
+
+```
+✗ Serialization error: Missing field in full_job action: title
+
+Error: Serialization error: Missing field in full_job action: title
+```
+
+`ironclaw routines list` fails with this error and **no routines fire** until the row is repaired. Lightweight routines on the same daemon also stop firing because the daemon can't successfully deserialize the routines table to compute next_fire_at.
+
+**Mitigation:** revert to `action_type='lightweight'` first to restore service, then re-do the migration with both action_type AND a complete full_job-shaped action_config (title + description + max_iterations).
+
+**Upstream fix candidate:** the `ironclaw routines edit` CLI should expose `action_type` as a flag, and the migration logic should validate the new action_config shape before committing the DB write. Currently the only way to flip action_type is direct DB UPDATE, which has no schema validation. Fork users who try to migrate routines via DB will hit this trap.
+
+### Finding 26: GPT-OSS-120B emits template-variable placeholders as literal tool args; `POST /issues/N/labels` via http tool fails schema validation
+
+**Two related symptoms observed on the same `full_job` cron tick** (`164bf22d-d41b-4276-a857-4217a1d37ed7`, 2026-05-12T02:22-02:24, 34 job_events, status=completed-but-nothing-claimed). Reproduces across multiple sequential fires after the routine prompt was migrated to `full_job` + explicit tool mapping.
+
+**Symptom 1 — placeholder-as-literal:** The agent's reasoning produces tool calls whose argument values are the *template variable names from the planning step*, emitted as literal strings:
+
+```json
+{"action": "get_issue", "issue_number": "<selected_issue_number>", ...}
+```
+
+```json
+{"method": "PATCH", "url": "https://api.github.com/repos/MultiAgency/kanban/issues/<selected_issue_number>", ...}
+```
+
+GitHub returns `Not Found` (404). The agent emits 4-6 such failed calls per tick before recovering to actual issue numbers (events 240-254 in the 02:22 trace, then events 259 onward use `42` and `41`). The recovery costs context window and tool-call iterations, displacing the substantive work.
+
+**Symptom 2 — `POST /issues/N/labels` schema rejection:** Even after the agent recovers to real issue numbers and uses the `http` tool per `AGENTS.md` guidance, GitHub returns:
+
+```
+"message": "Invalid request.\n\nNo subschema in \"anyOf\" matched."
+```
+
+…on `POST /repos/{owner}/{repo}/issues/{N}/labels`. Agent retries with two body shapes:
+
+```json
+{"labels": ["in-progress"]}        // wrapped object — rejected
+["in-progress"]                     // bare array — also rejected
+```
+
+Both fail. The label add step never completes, so the claim ritual stays half-done (assignee set, label not swapped) — the F23 workaround path is itself broken for the label-add step.
+
+**Likely mechanism (Symptom 1):** GPT-OSS-120B's structured-output decoding doesn't distinguish *reference to a variable defined in the same response* from *literal string value*. The agent's planning step says "first I'll select an issue, then I'll use its number as `<selected_issue_number>` in subsequent calls" — and the model emits the placeholder as the literal value rather than performing the substitution. Same family of failure as F20 (mid-call format drift), different surface area.
+
+**Likely mechanism (Symptom 2):** Either (a) the http tool's `json` field serialization is wrapping bare arrays incorrectly, (b) the request lacks required Content-Type or other headers for label endpoints specifically, or (c) the agent's PAT lacks fine-grained `Issues: Write` permission for label operations specifically. GitHub's `POST /issues/N/labels` accepts either `{"labels": [...]}` or `[...]` per `docs.github.com/rest/issues/labels` — neither shape works here.
+
+**Net effect:** Every routine fire since the migration to `full_job` + http-tool ritual mapping shows the same pattern: 26-48 job_events, `completed` status, zero issues closed, zero `llm_calls` rows (the recording gap from F24's mode shift compounds the diagnostic difficulty). Two issues did close earlier under different conditions (#44 closed via `lightweight` mode pre-migration; #46 closed via `full_job` but with manual cleanup of the claim ritual per F23). Post-migration, the routine produces no end-to-end closures.
+
+**Mitigations:**
+
+1. **Prompt hardening (immediate).** AGENTS.md's "Critical: fill in template variables before emitting" guidance addresses Symptom 1 by name. Verify in subsequent fires whether the model honors it.
+2. **API-call shape probe (next).** Manually test `POST /repos/MultiAgency/kanban/issues/<N>/labels` via curl with the agent's exact body shape and the same PAT to isolate whether Symptom 2 is the http tool's serialization, GitHub's API, or a credential scope. The diagnostic command is in scope for a 5-minute interactive verification.
+3. **Structural (v0.1).** Switch routine model to one with better structured-output adherence (Claude or GPT-4) for label-write workloads, or wait for the upstream PR adding label/assignee actions to the github WASM tool (F23 path B) which removes the http-tool dependency entirely.
+
+### Finding 27: IronClaw HTTP channel uses `X-Hub-Signature-256` HMAC, not a shared-secret header
+
+**Symptom:** First-attempt curl against `POST http://127.0.0.1:8080/webhook` with `X-Webhook-Secret: <value>` returns:
+
+```
+HTTP/1.1 401
+{"message_id":"00000000-0000-0000-0000-000000000000","status":"error",
+ "response":"Webhook authentication required. Provide X-Hub-Signature-256 header
+            (preferred) or 'secret' field in body (deprecated)."}
+```
+
+**Mechanism:** IronClaw v0.28.0's HTTP webhook channel does NOT use a plain shared-secret header (despite some docs and example scripts implying `X-Webhook-Secret`). The channel authenticates inbound requests via **HMAC-SHA256 over the request body**, sent as `X-Hub-Signature-256: sha256=<hex>` — identical scheme to GitHub's outbound webhooks. Body-shape fallback (`{"secret": "..."}` in JSON body) is supported but deprecated.
+
+**Implication for the v0.1 reactive substrate adapter:** the Cloudflare Worker that translates GitHub `issues` payloads into IronClaw prompts must compute its OWN HMAC over the forwarded body using the shared `HTTP_WEBHOOK_SECRET`/`IRONCLAW_WEBHOOK_SECRET` value, sent as `X-Hub-Signature-256`. A naive forward of GitHub's HMAC (computed over the GitHub payload) won't validate against the translated body. Worker code in `worker/src/index.ts` (kanban repo, post-v0.0.1) uses a shared `hmacSha256Hex` helper for both inbound GitHub validation and outbound IronClaw signing.
+
+**Operational note:** The 401-with-zero-UUID response is the standard "auth required" response — the channel IS up; it's just rejecting unsigned requests. To verify the channel is alive without restarting iclaw, send a malformed POST and observe whether you get a zero-UUID 401 (channel up, just unauthed) vs a connection refused or different error (channel actually down). This non-destructive probe was decisive in establishing that the running iclaw daemon was a valid forwarding target without requiring an env-var-injection restart.
+
+**Smoke-test recipe** (verifies the secret is set correctly on the iclaw side before deploying the Worker):
+
+```sh
+SECRET="<your-HTTP_WEBHOOK_SECRET-value>"
+BODY='{"user_id":"default","message":"channel smoke test"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
+curl -i -X POST http://127.0.0.1:8080/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -d "$BODY"
+# 200 OK with non-zero message_id → secret correct; ready to plug Worker into the channel.
+# 401 with zero UUID → secret mismatch; either fix Worker secret or fix iclaw env.
+```
+
 ### Finding N: _TBD — populated as future tracer probes surface issues_
+
+## Recovery playbooks
+
+When the same compound failure surfaces twice, write the recipe once. Each playbook below pairs a recognizable symptom signature with the steps that resolve it.
+
+### Broken GitHub credentials (F12c master-key rotation + UNIQUE-constraint silent no-op)
+
+**Symptom signature** (any combination):
+
+- Agent's HTTP `PATCH /repos/.../issues/N` requests return GitHub error bodies despite previously-working PAT auth.
+- IronClaw logs show repeating `WARN  Failed to inject credential for HTTP tool secret=github_token error=Secret("Decryption failed...`
+- `ironclaw tool auth github` reports success but the agent's next tool call still 401s.
+- Running `sqlite3 ~/.ironclaw/ironclaw.db "SELECT updated_at FROM secrets WHERE name='github_token'"` shows a timestamp from a prior session, not from the most recent auth attempt.
+
+**Root cause:** The `secrets` table has `UNIQUE (user_id, name)`. `ironclaw tool auth github` does not UPSERT — it silently no-ops on conflict. So a stale row encrypted with a rotated master key (F12c) blocks new writes indefinitely; subsequent auth flows appear to succeed but never replace the broken row.
+
+**Recovery:**
+
+1. Inspect the existing rows to confirm they're stale:
+
+   ```bash
+   sqlite3 ~/.ironclaw/ironclaw.db \
+     "SELECT id, name, provider, created_at, updated_at FROM secrets \
+      WHERE user_id='default' AND name LIKE 'github_%'"
+   ```
+
+   If `updated_at` is older than the most recent auth attempt, the rows are stale.
+
+2. Delete the stale rows:
+
+   ```bash
+   sqlite3 ~/.ironclaw/ironclaw.db \
+     "DELETE FROM secrets WHERE user_id='default' AND name LIKE 'github_%'"
+   ```
+
+   This removes the OAuth-shape `github_token`, the `github_token_refresh_token` if present, and `github_token_scopes`. All three should go — partial deletion leaves the credential lookup in an inconsistent state.
+
+3. Generate a fresh PAT at `github.com/settings/tokens` (classic, `repo` scope). Click **Configure SSO → Authorize** on the target org (MultiAgency) immediately — SAML enforcement blocks writes without per-PAT authorization.
+
+4. Re-run auth with the new PAT:
+
+   ```bash
+   GITHUB_TOKEN=ghp_<new-token> ironclaw tool auth github
+   ```
+
+   F13 (`validate_token` missing User-Agent header) causes the validation step to 403 even on a working token. When prompted **Save anyway? [y/N]**, type **y**. The token saves; actual agent operations include a User-Agent and work fine — only the validation path is broken upstream.
+
+5. Verify the new row landed with a current timestamp:
+
+   ```bash
+   sqlite3 ~/.ironclaw/ironclaw.db \
+     "SELECT name, updated_at FROM secrets WHERE name='github_token'"
+   ```
+
+   `updated_at` should reflect the moment of step 4.
+
+6. Re-prompt the agent in the REPL to retry whatever it was doing. The next tool call decrypts the fresh row and succeeds.
+
+**Time cost without playbook:** roughly 30 minutes diagnosing why "I just stored the token" doesn't fix the auth errors. The UNIQUE-constraint silent no-op is the non-obvious step — most users assume an auth command that returns success has updated state.
+
+**Prevention until upstream fixes land:**
+
+- F12c: Avoid master-key rotation. If rotation is unavoidable, accept that all stored secrets must be re-established.
+- F13: One-line PR upstream — see Finding 13. Not blocking once the "save anyway" path is known.
+- UNIQUE silent no-op: would require an `INSERT OR REPLACE` change in IronClaw's secret-store write path, or an explicit `secret delete` CLI subcommand. Until then, manual SQL is the path.
 
 ## Handoff to user driver
 

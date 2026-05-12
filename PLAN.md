@@ -93,15 +93,15 @@ Run in order of cost-to-set-up (cheapest first):
 - Closed issue with parseable handoff comment from agent assignee
 - **Substrate banked: cron.** T7.1 ran via the cron substrate on `MultiAgency/test` in v0.0.1 (see `docs/ironclaw-tracer-outcome.md` Phase 6). T6.4 MVP variant followed the same substrate (issues #4 → #5). Reactive substrate deferred to v0.1 — see SPEC.md §Deferred to v0.1 #6.
 
-### Wave 8 — Reactive substrate (v0.1.x)
+### Wave 8 — Reactive substrate (v0.1)
 
-Deferred from v0.0.1. The convention is substrate-agnostic; v0.1 wires path 3 end-to-end against a live GitHub webhook delivery. Per SPEC §Deferred to v0.1 #6, the v0.0.1 probe closed paths 1 and 2:
+Delivered in v0.1. The convention is substrate-agnostic; v0.1 wires path 3 end-to-end via a Cloudflare Worker adapter (`worker/`) fronting IronClaw's HTTP webhook channel. Empirically verified: a `ready`-label event on `MultiAgency/test` fired the kanban-worker convention end-to-end in ~1m 25s (label → webhook → Worker → IronClaw → claim ritual → file commit → handoff → close). Per SPEC §Deferred to v0.1 #6, paths 1 and 2 are not viable:
 
-- **Path 1** — github tool's `handle_webhook` action. Tool itself works (F18 cleared in v0.0.1), but the action operates on a payload that has to be handed to the agent by some other inbound mechanism. Path 1 collapses into "what underpins it" — there is no standalone path 1.
+- **Path 1** — github tool's `handle_webhook` action. Tool itself works, but the action operates on a payload that has to be handed to the agent by some other inbound mechanism. Path 1 collapses into "what underpins it" — there is no standalone path 1.
 - **Path 2** — reactive routine `trigger_type: webhook`. **Empirically closed.** `routine_create` accepts the trigger type and stores the routine, but the daemon registers no HTTP route. Direct `POST /hooks/<routine-path>` returns 404; no `Registered ... endpoint` line appears in startup logs for webhook-trigger routines. Runtime support is not implemented in IronClaw v0.28.0.
-- **Path 3** — HTTP webhook channel (`POST /webhook` with `{user_id, message}` body, `X-Webhook-Secret` header) plus an adapter that translates GitHub's webhook payload (`{action, issue, ...}`) to IronClaw's expected shape. **The only viable path.** Cloudflare Worker fronting `ironclaw.multiagency.services/webhook` is the recommended shape since the cloudflared tunnel is already in place.
+- **Path 3 (shipped)** — HTTP webhook channel (`POST /webhook` with `{user_id, content}` body, HMAC-signed via `X-Hub-Signature-256` — same scheme GitHub uses outbound) plus a Cloudflare Worker that validates GitHub's signature, translates events into natural-language prompts, and re-signs for IronClaw. The Worker ships at `worker/`; deployment + GitHub-webhook setup documented in `worker/README.md`.
 
-Acceptance: a `ready`-label event on a configured repo fires the kanban-worker convention within seconds of delivery (vs minutes for cron). The named tunnel was set up alongside v0.0.1 and is auto-started via launchd; it's the public ingress for path 3.
+Acceptance criterion met: per-event latency sub-second at the substrate level (Worker forwards in 50–140ms), ~1m 25s total wall-clock from label to issue close (most of which is the agent doing the work).
 
 ## Dependency graph
 

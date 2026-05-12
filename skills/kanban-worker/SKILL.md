@@ -74,6 +74,12 @@ When claiming, perform self-assign and label swap as one logical step, before do
 
 If you crash between steps 2 and 6, your next tick should detect the half-state (assignee set + `ready` label, or unassigned + `in-progress` label) and repair it before claiming new work.
 
+## Execute, don't just draft
+
+Drafting the work is not the same as completing it. After generating the content internally, you MUST call the side-effecting API tools to POST comments and close the issue. A claim ritual without a delivered handoff is a half-state per Rule 2; repair by re-prompting.
+
+A common failure: the agent generates the full work in its reasoning, sees it as complete, and stops without making the HTTP calls. From the kanban's perspective the issue is still `in-progress`, assigned, with no handoff comment — a half-state. Treat "the body of the comment exists in my response" and "the body of the comment is posted to GitHub" as different milestones. Internal reasoning ends; external API calls are what the convention measures.
+
 ## Body-text dependencies (Rule 3)
 
 Declare parent issues using `- [ ] #N` checklist syntax in the issue body. The dependency-promotion Action reads only body-text declarations.
