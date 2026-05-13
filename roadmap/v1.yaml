@@ -1,0 +1,44 @@
+# v1.yaml — this repo's actual v1 vision
+#
+# Source of the must-have capabilities below: the ten v1 architectural
+# commitments in PLAN.md:53-62. Feed this file to docs/scaffolding/
+# v1-to-roadmap.md to produce a roadmap.yaml skeleton — see
+# docs/scaffolding/worked-example.yaml for the canonical output shape
+# this generates.
+#
+# Note: this repo already has roadmap/v1-issues.yaml with 45 hand-crafted
+# entries. This file is the v1 vision the scaffold prompt operates on;
+# it is NOT a replacement for the existing roadmap.
+
+vision: |
+  A hosted, multi-tenant kanban application that operates the
+  MultiAgency/kanban convention as a service: bidirectional GitHub
+  sync, agent-native workflow, and convention-preserving deployment
+  alongside the existing pure-convention forks.
+
+primary_user: |
+  Two-sided: (1) human owners who want the kanban convention's
+  agent-coordination semantics with the convenience of a hosted
+  surface; (2) the agents themselves, who claim and complete work via
+  the same convention they use on pure-fork repositories — the hosted
+  app should not require agents to learn anything new.
+
+# --- must_have_capabilities ---
+# Derived from PLAN.md:53-62 "ten v1 architectural commitments."
+# Each capability statement compresses one or more of the ten into a
+# user-facing capability. The numbered references in parens map back
+# to PLAN.md commitments.
+must_have_capabilities:
+  - "Bidirectional GitHub sync (commitment 2) — labels, assignees, and handoff comments stay aligned in both directions"
+  - "Convention preservation (commitment 1) — pure-convention forks continue to work without changes; the hosted app is opt-in, not a replacement"
+  - "Single-tenant by default with multi-tenant as an ops-toggled flag (commitment 3)"
+  - "Schema portability across SQLite and Postgres (commitment 4) — no features locked to either dialect"
+  - "GitHub OAuth for sessions, GitHub PAT for API (commitment 5) — no NEAR-wallet dependency"
+  - "Byte-identical v0 handoff format (commitment 6) — parseHandoff is shared between the v0 Action and the v1 app; v1 readers accept all v0 handoffs (commitment 10)"
+  - "Intact skill:* label semantics (commitment 7) — read/write them on synced GitHub issues, preserving the convention's eligibility-and-routing surface"
+  - "Capability parity (commitment 8) — no paid-only features at v1.0.0; future hosted tier differs on convenience, never capability"
+  - "GitHub-only integration surface (commitment 9) — no generic plugin architecture; second-integration justification deferred until a real second integration is requested"
+
+deployment_target: hosted
+
+cadence_preference: small-frequent

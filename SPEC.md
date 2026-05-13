@@ -67,6 +67,14 @@ A handoff comment has three parts: a bold one-line summary, a fenced JSON metada
   "changed_files": ["path/to/file"],
   "verification": ["command or check"],
   "residual_risk": ["what wasn't covered"],
+  "follow_ups": [
+    {
+      "title": "short title",
+      "body": "issue body; Action appends `- [ ] #parent` automatically",
+      "skills": ["skill:research"],
+      "agent_eligible": true
+    }
+  ],
   "links": ["url"]
 }
 ```
@@ -74,7 +82,9 @@ A handoff comment has three parts: a bold one-line summary, a fenced JSON metada
 Optional prose context follows here.
 ````
 
-All JSON fields are optional; agents include only those that apply. The parser is permissive — it returns `null` on a missing fence or malformed JSON rather than throwing, and downstream agents proceed without the metadata.
+All JSON fields are optional; agents include only those that apply. The parser is permissive on string-array fields — it returns `null` on a missing fence or malformed JSON rather than throwing, and downstream agents proceed without the metadata.
+
+The `follow_ups` field is optional and structured: each entry, if well-formed, materializes as a new GitHub issue at parent-close time via the dependency-promotion Action. Each follow-up issue is created with the listed `skills` as `skill:*` labels, plus `ready` and (conditionally) `agent-eligible`; the Action appends `- [ ] #parent` to the body so the convention's dependency parser sees the link. Malformed `follow_up` entries are dropped silently at parse time; the field itself is non-mandatory — agents include it only when residuals are concrete enough to file as discrete work.
 
 ## Tech Stack
 
@@ -174,7 +184,7 @@ The repo doubles as both source code for the Action and the template content hum
 
 ## Code Style
 
-TypeScript with named exports, no default exports. JSDoc on every exported function and type. No external runtime dependencies for parsing utilities — keep `src/lib/` pure TypeScript with regex-based parsing. The Action handler in `src/action/index.ts` is the only place `@actions/*` packages appear.
+TypeScript with named exports preferred. JSDoc on every exported function and type. No external runtime dependencies for parsing utilities — keep `src/lib/` pure TypeScript with regex-based parsing. The Action handler in `src/action/index.ts` is the only place `@actions/*` packages appear. The Cloudflare Worker at `worker/src/index.ts` uses `export default { fetch }` per the module-worker runtime contract; named exports cannot be universally enforced while that constraint holds.
 
 Example from `src/lib/handoff.ts`:
 

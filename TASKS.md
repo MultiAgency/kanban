@@ -159,11 +159,11 @@
   - Files: (none — operational)
   - Outcome: 22 `kanban-tick` cron fires in IronClaw's `routine_runs`; 4 substantive issue closures via the cron substrate (#42 ADR multi-tenancy, #44 research agent-native UX, #45 Hono skeleton, #46 rsbuild ADR). Banked under cron substrate only — webhook-substrate dispatch unverified per Phase 9 honesty correction in `docs/ironclaw-tracer-outcome.md`.
 
-- [ ] **T6.4: Run T4 (multi-agent handoff)**
+- [x] **T6.4: Run T4 (multi-agent handoff)** — MVP variant banked at v0.0.1
   - Acceptance: per SPEC §T4 — three agents (A's owner, B's owner, C's owner) complete the A → B → C chain; C's agent reads both parent handoffs and posts a synthesis handoff whose `links` array contains both parents; no human intervention beyond initial issue authoring
   - Verify: chain of three closed issues; C's handoff JSON includes both parent comment URLs in `links`
   - Files: (none — operational)
-  - Status: partial. `tests/fixtures/t6.4-b-handoff.md` captures one B-position handoff; strict three-agent A→B→C chain with synthesis-of-both-parents in C's handoff is not yet evidenced. Tracks alongside T8.4 — closing both unblocks a full convention demo.
+  - Outcome: MVP variant shipped (2 personas, 1 handoff edge): #4 → #5 on `MultiAgency/test` (2026-05-10). PersonaB's handoff `links` array contains the URL of personaA's handoff comment, validating the cross-actor protocol. Fixture at `tests/fixtures/t6.4-b-handoff.md`; `tests/handoff.test.ts` asserts the upstream cross-reference. Full A→B→C ceremony (3 personas, 2 handoffs with synthesis-of-both-parents in C's handoff) deferred to v0.1 per `docs/release-prep-v0.0.1.md`.
 
 ## Wave 6.5 — Release tag
 
@@ -205,11 +205,8 @@ Deferred from v0.0.1 per SPEC.md §Deferred to v0.1 #6. Path 3 (HTTP webhook cha
   - Files: a new repo (`MultiAgency/kanban-webhook-adapter` or similar) housing the Worker source + deploy config; reference link added to `README.md` and `docs/routines/reactive.yaml.example`
   - Outcome: Worker shipped in-repo at [`worker/`](worker/) (not a separate repo); deployed at `github.multiagency.services`. Active GitHub webhooks on `MultiAgency/kanban` (hook 621965691) and `MultiAgency/test` (hook 621933069), both returning 200 OK on each delivery. IronClaw forward shape is `{user_id, content, metadata}` with HMAC re-signing via `X-Hub-Signature-256` rather than the earlier-spec'd `X-Webhook-Secret` (see Finding 27).
 
-- [ ] **T8.4: Wire GitHub webhook against `MultiAgency/test` (or fork) + verify end-to-end**
+- [x] **T8.4: Wire GitHub webhook against `MultiAgency/test` (or fork) + verify end-to-end**
   - Acceptance: GitHub webhook on the test repo points at the adapter's public URL; a `ready`-label event fires the kanban-worker convention within seconds; agent completes claim → work → handoff → close
-  - Verify: GitHub webhook delivery log shows 200 from the adapter; IronClaw routine history shows the corresponding run; closed issue has a parseable handoff matching the `tests/handoff.test.ts` pattern
-  - Files: `docs/routines/reactive.yaml.example` (graduate the "unverified" note to "verified config" once the path lands); `skills/kanban-worker/SKILL.md` (codify the adapter path); `README.md` (graduate the "deferred to v0.1" paragraph to a real setup section)
-  - Status: transport verified (T8.2 + T8.3 banked). Two distinct dispatch surfaces, only one of which works in IronClaw v0.28.0:
-    - **Routine dispatch via `/hooks/<path>` (Path 2): not implemented.** Empirically, `POST /hooks/<anything>` returns 404 — daemon does not register HTTP routes for `trigger_type=webhook` routines (PLAN.md:101). The `kanban-test` placeholder routine that previously occupied this slot has been deleted from the DB; recreating it would not change the outcome until upstream registers the routes.
-    - **Conversation-channel dispatch via `/webhook` (Path 3): works empirically.** Worker forwards land in `conversation_messages` with `conversations.channel='http'`; an agent processes the kanban-worker prompt in conversation mode and may spawn `sandbox`-sourced sub-jobs via `create_job` for focused work (ADR drafting, file commits). Partial closure observed against `MultiAgency/kanban` (conversation `3ef5ec9a` drafted #40's ADR; sandbox sub-jobs handled #40/#41 ADR work on 2026-05-12). A complete claim → work → handoff → close cycle via this path has not yet been observed end-to-end in this DB.
-    - Tick when one real ADR commits + closes via the Worker → `/webhook` → conversation → sub-jobs path on the canonical roadmap repo. See Phase 9 honesty correction in `docs/ironclaw-tracer-outcome.md` for the originating analysis (which framed dispatch narrowly via `routine_runs` and missed the conversation-channel path).
+  - Verify: GitHub webhook delivery log shows 200 from the adapter; closed issue has a parseable handoff matching the `tests/handoff.test.ts` pattern
+  - Files: `README.md` (deferred-to-v0.1 paragraph replaced with both-substrates setup section); `docs/routines/README.md` (new side-by-side comparison doc)
+  - Outcome: Complete claim → work → handoff → close observed end-to-end on `MultiAgency/kanban#40` via the Worker → `/webhook` → conversation → `create_or_update_file` path after the Finding 30 parameter-name fix. ADR committed at `docs/research/adr-0002-sse-over-websockets.md` (`8d55de5`), parseable handoff comment posted, issue closed with `state_reason=completed`. Route 2 (`/hooks/<path>` routine dispatch) remains not implemented in IronClaw v0.28.0; Route 3 (HTTP channel via `/webhook`) is the shipping path.

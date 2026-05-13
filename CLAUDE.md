@@ -26,7 +26,7 @@ After any change to `src/action/`, re-run `npm run build` to keep `dist/index.js
 
 ## Conventions
 
-- **Named exports only.** Biome's `style/noDefaultExport` rule (set to `error` in `biome.json`) blocks default exports. Required by SPEC §Code Style.
+- **Named exports preferred** across the codebase, but not enforced by lint. The repo previously set Biome's `style/noDefaultExport` rule to `error`, but `worker/src/index.ts` (Cloudflare Workers module-format entry) requires `export default { fetch }` by the runtime contract — the rule was either universally suppressed via override or violated. The honest resolution: remove the rule from `biome.json`, document the preference here, enforce socially in code review. See SPEC §Code Style.
 - **JSDoc on every exported function and type.** Required by SPEC §Code Style; not lint-enforced. Code review catches drift.
 - **Pure utilities in `src/lib/`.** Regex-based parsing only; no `@actions/*` imports. Tests live alongside in `tests/<name>.test.ts`.
 - **`@actions/*` boundary.** `src/action/index.ts` is the only file that imports `@actions/core` or `@actions/github`. Octokit is injected as a parameter to all testable functions; `main()` and the `require.main === module` entrypoint guard are intentionally not unit-tested (deferred to T6.2).

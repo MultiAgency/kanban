@@ -19506,7 +19506,9 @@ var index_exports = {};
 __export(index_exports, {
   allParentsClosed: () => allParentsClosed,
   confirmParents: () => confirmParents,
+  createFollowUps: () => createFollowUps,
   discoverChildren: () => discoverChildren,
+  fetchHandoffComment: () => fetchHandoffComment,
   promote: () => promote,
   run: () => run
 });
@@ -23739,6 +23741,44 @@ function parseDependencies(issueBody) {
   return result;
 }
 
+// src/lib/handoff.ts
+var HANDOFF_FENCE_RE = /```handoff\n([\s\S]*?)\n```/;
+function parseHandoff(commentBody) {
+  const match = HANDOFF_FENCE_RE.exec(commentBody);
+  if (!match) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+  if (parsed.follow_ups !== void 0) {
+    if (!Array.isArray(parsed.follow_ups)) {
+      delete parsed.follow_ups;
+    } else {
+      const valid = parsed.follow_ups.filter(isValidFollowUp);
+      if (valid.length === 0) {
+        delete parsed.follow_ups;
+      } else {
+        parsed.follow_ups = valid;
+      }
+    }
+  }
+  return parsed;
+}
+function isValidFollowUp(x) {
+  if (typeof x !== "object" || x === null) return false;
+  const o = x;
+  if (typeof o.title !== "string" || o.title.length === 0) return false;
+  if (typeof o.body !== "string") return false;
+  if (o.skills !== void 0) {
+    if (!Array.isArray(o.skills)) return false;
+    if (!o.skills.every((s) => typeof s === "string")) return false;
+  }
+  if (o.agent_eligible !== void 0 && typeof o.agent_eligible !== "boolean") return false;
+  return true;
+}
+
 // src/action/index.ts
 function isSearchResultItem(item) {
   if (typeof item !== "object" || item === null) return false;
@@ -23748,8 +23788,11 @@ function isSearchResultItem(item) {
   return obj.labels.every((l) => typeof l === "string" || typeof l === "object" && l !== null);
 }
 var SEARCH_PER_PAGE = 100;
+var COMMENTS_PER_PAGE = 100;
 var READY = "ready";
 var BLOCKED = "blocked";
+var AGENT_ELIGIBLE = "agent-eligible";
+var HANDOFF_FENCE_TOKEN = "```handoff\n";
 async function discoverChildren(octokit, ref, closedNumber) {
   const q = `is:issue is:open repo:${ref.owner}/${ref.repo} "#${closedNumber}" in:body`;
   const { data } = await octokit.rest.search.issuesAndPullRequests({
@@ -23807,7 +23850,51 @@ async function promote(octokit, ref, child) {
     name: BLOCKED
   });
 }
+async function fetchHandoffComment(octokit, ref, issueNumber) {
+  try {
+    const { data } = await octokit.rest.issues.listComments({
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: issueNumber,
+      per_page: COMMENTS_PER_PAGE
+    });
+    const items = data;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const body = items[i].body ?? "";
+      if (body.includes(HANDOFF_FENCE_TOKEN)) return body;
+    }
+  } catch (err) {
+    warning(`unable to fetch comments on #${issueNumber}: ${msg(err)}`);
+  }
+  return "";
+}
+async function createFollowUps(octokit, ref, parentNumber, parentHandoffBody) {
+  const handoff = parseHandoff(parentHandoffBody);
+  if (!handoff?.follow_ups?.length) return [];
+  const created = [];
+  for (const fu of handoff.follow_ups) {
+    const labels = [READY, ...fu.skills ?? []];
+    if (fu.agent_eligible) labels.push(AGENT_ELIGIBLE);
+    try {
+      const { data } = await octokit.rest.issues.create({
+        owner: ref.owner,
+        repo: ref.repo,
+        title: fu.title,
+        body: `${fu.body}
+
+- [ ] #${parentNumber}`,
+        labels
+      });
+      created.push(data.number);
+    } catch (err) {
+      warning(`follow_up from #${parentNumber} failed to create: ${msg(err)}`);
+    }
+  }
+  return created;
+}
 async function run(octokit, ref, closedNumber) {
+  const handoffBody = await fetchHandoffComment(octokit, ref, closedNumber);
+  await createFollowUps(octokit, ref, closedNumber, handoffBody);
   const candidates = await discoverChildren(octokit, ref, closedNumber);
   const children = confirmParents(candidates, closedNumber);
   for (const child of children) {
@@ -23857,7 +23944,9 @@ if (require.main === module) {
 0 && (module.exports = {
   allParentsClosed,
   confirmParents,
+  createFollowUps,
   discoverChildren,
+  fetchHandoffComment,
   promote,
   run
 });

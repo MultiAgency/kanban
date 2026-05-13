@@ -1,0 +1,245 @@
+# worked-example.yaml — illustrative scaffold output
+#
+# This is the kind of output `docs/scaffolding/v1-to-roadmap.md` produces
+# when fed `roadmap/v1.yaml` (this repo's actual v1 vision).
+#
+# IT IS NOT THE ACTUAL ROADMAP for MultiAgency/kanban. The actual roadmap
+# lives at `roadmap/v1-issues.yaml` (45 hand-crafted entries targeting
+# v1.0.0). This file demonstrates the scaffold prompt's output shape for
+# fork users learning the pattern.
+#
+# Source of v0.1.1 + v0.2.0 content: the v0.1.1-roadmap.md proposal in
+# IronClaw workspace memory (`memory_documents` table). The scaffold
+# prompt expresses that proposal as kanban-conventional YAML, then decays
+# detail with release distance.
+#
+# Schema follows roadmap/v1-issues.yaml: letter-prefix IDs by track,
+# labels per `.github/labels.yml`, depends_on referencing other IDs.
+# In a real scaffold output the letter-prefix range would NOT collide
+# with existing v1-issues.yaml IDs — this example uses S1, S2, ... for
+# clarity ("Scaffold" prefix) so it's obvious these are illustrative.
+
+# ============================================================
+# v0.1.1 (Patch) — claim-state lint
+# Full body — this is the immediate-release scope.
+# ============================================================
+
+- id: S1
+  track: integration
+  title: "Claim-state lint GitHub Action"
+  labels:
+    - ready
+    - agent-eligible
+    - skill:code
+  depends_on: []
+  body: |
+    Detect and report kanban half-states (e.g., an issue that is
+    self-assigned but still carries the `ready` label, or `in-progress`
+    without an assignee). Half-states silently break the convention's
+    invariants and are a common fork-user pitfall.
+
+    **Acceptance:** GitHub Action `.github/workflows/claim-state-lint.yml`
+    runs on `issues.opened`, `issues.labeled`, `issues.unlabeled`, and
+    `issues.assigned`. Scans the affected issue for the two illegal
+    combinations:
+
+    - assigned + `ready` (claim ritual missing the label swap)
+    - `in-progress` + no assignee (label set without self-assign)
+
+    On violation, post a comment on the offending issue naming the
+    inconsistency and the suggested fix. Optionally post a summary to a
+    dedicated `#lint-report` issue (created on first run if missing).
+
+    **Verify:** create a test issue with each illegal combination;
+    confirm the action fires and posts the expected comment. Confirm no
+    false positives on the valid states (`ready` alone, `in-progress` +
+    assignee, `blocked` + assignee + parent refs).
+
+    **Output:** `.github/workflows/claim-state-lint.yml` +
+    `src/lint/claim-state.ts` (the action handler) + tests at
+    `tests/claim-state.test.ts`.
+
+# ============================================================
+# v0.2.0 (Minor) — 1–2 sentence sketches per item
+# ============================================================
+
+- id: S2
+  track: integration
+  title: "Native sub-issue integration (replace body-text parsing for parents)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S1]
+  body: |
+    Consume GitHub's native sub-issue / "Tracked by" API for parent
+    discovery, replacing the body-text checklist parser in
+    `src/lib/dependencies.ts`. Full body to be written when this
+    release approaches; key open question is whether body-text parsing
+    stays as a fallback or gets removed entirely.
+
+- id: S3
+  track: api
+  title: "Batch parent-status lookup via GraphQL"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S2]
+  body: |
+    Replace per-parent REST calls in `src/action/index.ts` with a
+    single GraphQL `nodes` query batching all parents. Reduces
+    rate-limit pressure on dense dependency graphs. Full body to be
+    written when this release approaches.
+
+- id: S4
+  track: integration
+  title: "Concurrent-claim race arbitration"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S1]
+  body: |
+    Add atomic claim check (verify still-`ready` immediately before
+    self-assigning) to prevent duplicate work when two agents race on
+    the same issue. Full body to be written when this release approaches.
+
+- id: S5
+  track: integration
+  title: "Cron cadence configurable via .github/kanban.yml"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S1]
+  body: |
+    Expose a repository-level config file (`.github/kanban.yml`) where
+    fork owners set the default cron interval consumed by routine setup
+    docs and (optionally) by IronClaw routine creation. Full body to be
+    written when this release approaches.
+
+- id: S6
+  track: integration
+  title: "Upstream PR: github WASM tool claim-ritual write actions"
+  labels:
+    - blocked
+    - human-only
+    - skill:code
+  depends_on: []
+  body: |
+    Contribute the missing claim-ritual write actions (`add_assignees`,
+    `add_labels`, `remove_label`, `update_issue` for state) to the
+    upstream `github` WASM tool, eliminating the http-tool workaround
+    documented in F23. `human-only` because the contribution involves
+    external coordination with the nearai/ironclaw maintainers.
+
+- id: S7
+  track: integration
+  title: "Enhanced lint suite — label transitions + orphaned blocked"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S1]
+  body: |
+    Extend the v0.1.1 claim-state lint to enforce correct label
+    transitions (only allowed: `ready` → `in-progress`, `in-progress`
+    → `blocked`/closed, `blocked` → `in-progress`/`ready`) and detect
+    `blocked` issues whose `depends_on` parents are all closed. Full
+    body to be written when this release approaches.
+
+# ============================================================
+# v0.3.0–v0.5.0 — title-only skeletons
+# ============================================================
+
+- id: S8
+  track: data-model
+  title: "Schema portability — Drizzle adapter for SQLite ↔ Postgres parity"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S2]
+  body: |
+    Skeleton — full body to be written when this release approaches.
+
+- id: S9
+  track: integration
+  title: "GitHub OAuth session flow"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S8]
+  body: |
+    Skeleton — full body to be written when this release approaches.
+
+- id: S10
+  track: api
+  title: "REST CRUD surface for tasks (cursor pagination)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S8]
+  body: |
+    Skeleton — full body to be written when this release approaches.
+
+- id: S11
+  track: integration
+  title: "Bidirectional GitHub sync — outbound write path"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S9, S10]
+  body: |
+    Skeleton — full body to be written when this release approaches.
+
+# ============================================================
+# v1.0.0 — title-only skeletons + must_have_capability tag
+# ============================================================
+
+- id: S12
+  track: ui
+  title: "Hosted web UI — task board and detail views"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S10, S11]
+  body: |
+    Satisfies must_have_capabilities[0] "Bidirectional GitHub sync"
+    and must_have_capabilities[6] "Byte-identical v0 handoff format"
+    on the UI surface. Skeleton — full body to be written when this
+    release approaches.
+
+- id: S13
+  track: integration
+  title: "Multi-tenant flag (ops-toggled, single-tenant default)"
+  labels:
+    - blocked
+    - agent-eligible
+    - skill:code
+  depends_on: [S9]
+  body: |
+    Satisfies must_have_capabilities[2] "Single-tenant by default
+    with multi-tenant as an ops-toggled flag". Skeleton — full body
+    to be written when this release approaches.
+
+- id: S14
+  track: research-docs
+  title: "Convention-preservation contract for pure-fork forks"
+  labels:
+    - blocked
+    - human-only
+    - skill:writing
+  depends_on: [S11]
+  body: |
+    Satisfies must_have_capabilities[1] "Convention preservation —
+    pure-convention forks continue to work without changes". Documents
+    the guarantee + verification procedure. `human-only` because the
+    contract is a public commitment to existing fork users; wording is
+    a taste/political decision. Skeleton — full body to be written
+    when this release approaches.

@@ -6,13 +6,15 @@ How to deploy an IronClaw agent that fires on a cron schedule, picks up `ready` 
 
 ## Status
 
-The cron substrate is the v0 path and remains runnable. The reactive substrate in `reactive-setup.md` is the canonical v0.1 path: it removes 0–5 minutes of polling latency and side-steps the failure modes described under "Known limits" below. Pick cron when:
+Both cron and reactive substrates are verified end-to-end and can run alongside each other. Cron complements reactive by mopping up missed events and any half-states a stalled webhook fire leaves behind; reactive complements cron by responding within seconds rather than waiting up to 5 minutes for the next tick. The cron tick's step-2 eligibility check excludes `in-progress` (condition (e) in `cron-tick-prompt.md`) so the two substrates cannot race on the same issue. Skill behavior, claim ritual, handoff format, and eligibility check are otherwise identical — only the trigger differs.
+
+Run cron-only when:
 
 - You don't want to operate the Cloudflare Worker adapter that the reactive substrate needs
 - You're on a closed network where the GitHub webhook can't reach your IronClaw instance
 - Latency in the minutes-not-seconds range is fine for your workload
 
-Otherwise, prefer reactive. Skill behavior, claim ritual, handoff format, and eligibility check are identical between the two substrates — only the trigger differs.
+See [`docs/routines/README.md`](README.md) for the side-by-side comparison.
 
 ## Prerequisites
 
@@ -112,13 +114,14 @@ Per-run status, duration, and any errors are recorded.
 
 ## Known limits under the current routine model
 
-The cron path under `openai/gpt-oss-120b` (IronClaw v0.28.0's default routine model) fails on roughly three-quarters of fires. The dominant patterns, all documented in `docs/ironclaw-tracer-outcome.md`:
+The cron path under `openai/gpt-oss-120b` (IronClaw v0.28.0's default routine model) produces successful end-to-end fires but a non-trivial fraction stall mid-cycle. The residual patterns, all documented in `docs/ironclaw-tracer-outcome.md`:
 
-- **Finding 23 — github WASM missing convention primitives.** `add_assignees`, `add_labels`, `remove_label`, and state-changing `update_issue` are not in the action enum. The prompt at `cron-tick-prompt.md` works around this with the built-in `http` tool, but model adherence to the workaround is imperfect.
+- **Finding 23 — github WASM missing convention primitives.** `add_assignees`, `add_labels`, `remove_label`, and state-changing `update_issue` are not in the action enum. The prompt at `cron-tick-prompt.md` works around this with the built-in `http` tool. The workaround is reliable once the http-tool argument name is correct — `body=` not `json=` (Finding 30).
 - **Finding 25 — `full_job` deserialization breakage.** Covered under Operational notes above.
-- **Finding 26 — placeholder-leak cruft.** The model occasionally emits `<path-from-issue-body>` and similar bracket-template strings as literal tool arguments. The `.github/workflows/no-cruft.yml` CI check rejects any commit whose changed paths contain `<` or `>`. The same finding also covers the variant where `POST /issues/N/labels` body shape diverges from the GitHub REST schema.
+- **Finding 26 — placeholder-leak cruft.** The model occasionally emits `<path-from-issue-body>` and similar bracket-template strings as literal tool arguments. The `[FILL: name]` distinctive-marker form in `cron-tick-prompt.md` reduces the rate; `.github/workflows/no-cruft.yml` is the CI backstop, rejecting any commit whose changed paths contain `<` or `>`.
+- **Mid-cycle stalls.** A fire occasionally completes the claim ritual + commit but skips the handoff comment or close, leaving an `in-progress` half-state on the issue. The cron tick's step-2 condition (e) excludes `in-progress` from new claims (to avoid racing the webhook), so the next tick will skip the half-state issue rather than repair it. Manual repair (toggle `ready` off-then-on to fire the webhook substrate, or just close + comment by hand) is currently required. A dedicated repair routine is a v0.1.x work item; stronger routine models that reduce the stall rate are also on that track.
 
-The reactive substrate avoids the `*/5 * * * *` blast pattern and lets you scope each fire to a specific labeled issue (lower model load, higher signal-to-noise). For the cron path to become routine-shape, either (a) swap the routine model to a more capable one, or (b) wait for the upstream PR adding the missing primitives to the github WASM tool (F23 path B), which removes the http-tool dependency entirely.
+The reactive substrate complements cron rather than replacing it. Run both: reactive responds within seconds of a new `ready` label; cron picks up the backlog and any issue that missed its webhook delivery.
 
 ## Heartbeat as an alternative
 

@@ -1,0 +1,58 @@
+# v1.yaml — example template for fork users
+#
+# Fill this in for your project, then feed to the kanban-scaffolder skill
+# (or the canonical prompt at docs/scaffolding/v1-to-roadmap.md) to produce
+# a roadmap.yaml ready for `npm run push-roadmap`.
+#
+# This file is illustrative. Replace the example content with your own.
+
+# --- vision ---
+# 1–2 sentence statement of what the product does at v1.0.0.
+# Concrete enough to anchor scope decisions; abstract enough to admit
+# multiple implementation paths.
+vision: |
+  A self-hostable feedback aggregator that ingests user comments from
+  GitHub Discussions, Discord, and email, deduplicates them, and surfaces
+  the top recurring themes weekly via a static report and a webhook.
+
+# --- primary_user ---
+# Who uses it, what job they're hiring it for. Be specific about the
+# context where they reach for this tool.
+primary_user: |
+  Solo product builders running early-stage products with <500 monthly
+  active users, hired to spot recurring feedback themes they'd otherwise
+  miss while context-switching between channels.
+
+# --- must_have_capabilities ---
+# 3–7 capability statements that, taken together, define v1.0.0.
+# Capabilities, not features — describe what the user can DO, not what
+# the product HAS. Each capability becomes an organizing principle for
+# one or more issues across the scaffolded roadmap.
+must_have_capabilities:
+  - "Ingest feedback from GitHub Discussions via the GitHub API"
+  - "Ingest feedback from Discord via webhook"
+  - "Ingest feedback from email via IMAP polling"
+  - "Deduplicate semantically-similar feedback within a 7-day window"
+  - "Cluster feedback into recurring themes with at-least-3-mention threshold"
+  - "Publish a weekly static-HTML report at a configurable path"
+  - "Fire a webhook (configurable URL) when a new theme crosses threshold"
+
+# --- deployment_target ---
+# Where v1.0.0 actually runs. Affects framework choices, secrets handling,
+# DB selection, and the v0.0.1 minimum-deployable shape.
+#
+# Options:
+#   hosted       — a managed service the user signs up for
+#   self-hosted  — fork user runs the binary/container themselves
+#   both         — both deployment modes shipped at v1.0.0
+deployment_target: self-hosted
+
+# --- cadence_preference ---
+# How frequently does the fork user want to ship between v0.0.1 and v1.0.0?
+# Influences how many issues land per release and how aggressively the
+# scaffold should decompose the must-have capabilities.
+#
+# Options:
+#   small-frequent  — 3–5 issues per release, 1–2 weeks apart
+#   larger-monthly  — 8–12 issues per release, 4–6 weeks apart
+cadence_preference: small-frequent

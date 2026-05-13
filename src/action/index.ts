@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { parseDependencies } from "../lib/dependencies";
+import { parseHandoff } from "../lib/handoff";
 
 /**
  * Minimal injectable Octokit shape — the full type returned by
@@ -55,8 +56,11 @@ function isSearchResultItem(item: unknown): item is SearchResultItem {
 }
 
 const SEARCH_PER_PAGE = 100;
+const COMMENTS_PER_PAGE = 100;
 const READY = "ready";
 const BLOCKED = "blocked";
+const AGENT_ELIGIBLE = "agent-eligible";
+const HANDOFF_FENCE_TOKEN = "```handoff\n";
 
 /**
  * Search for open issues whose body mentions the closed issue's number.
@@ -166,10 +170,87 @@ export async function promote(
 }
 
 /**
- * Top-level orchestration: discover candidates, confirm parent membership,
- * and promote each child whose full parent set is now closed.
+ * Find the last comment on an issue whose body carries a `handoff` fence.
+ * Returns the body of the most recent matching comment, or "" if none.
+ * Errors (permissions, rate limit, network) downgrade to "" with a warning
+ * so the promotion pass continues even when comments are unreachable.
+ */
+export async function fetchHandoffComment(
+  octokit: GhClient,
+  ref: IssueRef,
+  issueNumber: number,
+): Promise<string> {
+  try {
+    const { data } = await octokit.rest.issues.listComments({
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: issueNumber,
+      per_page: COMMENTS_PER_PAGE,
+    });
+    const items = data as unknown as Array<{ body?: string | null }>;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const body = items[i].body ?? "";
+      if (body.includes(HANDOFF_FENCE_TOKEN)) return body;
+    }
+  } catch (err) {
+    core.warning(`unable to fetch comments on #${issueNumber}: ${msg(err)}`);
+  }
+  return "";
+}
+
+/**
+ * Materialize follow-up issues from a closed parent's handoff comment.
+ * Each FollowUp becomes a new issue with the parent body-linked via
+ * `- [ ] #parent` (so the convention's dependency parser sees the edge),
+ * labels = `ready` + `agent-eligible` (when requested) + each `skill:*`.
+ *
+ * Per-entry failures are warned and skipped — one bad follow-up doesn't
+ * suppress the others, and a network error on one create doesn't abort
+ * the promotion pass that follows.
+ */
+export async function createFollowUps(
+  octokit: GhClient,
+  ref: IssueRef,
+  parentNumber: number,
+  parentHandoffBody: string,
+): Promise<number[]> {
+  const handoff = parseHandoff(parentHandoffBody);
+  if (!handoff?.follow_ups?.length) return [];
+
+  const created: number[] = [];
+  for (const fu of handoff.follow_ups) {
+    const labels = [READY, ...(fu.skills ?? [])];
+    if (fu.agent_eligible) labels.push(AGENT_ELIGIBLE);
+    try {
+      const { data } = await octokit.rest.issues.create({
+        owner: ref.owner,
+        repo: ref.repo,
+        title: fu.title,
+        body: `${fu.body}\n\n- [ ] #${parentNumber}`,
+        labels,
+      });
+      created.push(data.number);
+    } catch (err) {
+      core.warning(`follow_up from #${parentNumber} failed to create: ${msg(err)}`);
+    }
+  }
+  return created;
+}
+
+/**
+ * Top-level orchestration: materialize follow-ups from the closed issue's
+ * handoff, then discover candidates, confirm parent membership, and promote
+ * each child whose full parent set is now closed.
+ *
+ * Follow-ups land before promotion so the newly-created issues are not
+ * themselves targets of this same run — they'll naturally be `ready` (or
+ * `blocked`, if the agent gave them additional parents) when the next
+ * issues.closed event fires.
  */
 export async function run(octokit: GhClient, ref: IssueRef, closedNumber: number): Promise<void> {
+  const handoffBody = await fetchHandoffComment(octokit, ref, closedNumber);
+  await createFollowUps(octokit, ref, closedNumber, handoffBody);
+
   const candidates = await discoverChildren(octokit, ref, closedNumber);
   const children = confirmParents(candidates, closedNumber);
 

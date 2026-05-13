@@ -24,6 +24,14 @@ The first ` ```handoff ` block in the comment is parsed; everything outside it i
   "changed_files": ["src/lib/dependencies.ts", "tests/dependencies.test.ts"],
   "verification": ["npm test tests/dependencies.test.ts"],
   "residual_risk": ["Native sub-issue API path not implemented (Deferred to v0.1 #4)"],
+  "follow_ups": [
+    {
+      "title": "Native sub-issue API integration",
+      "body": "When the GitHub sub-issue API exits preview, extend parseDependencies to read native sub-issue links in addition to body-text declarations.",
+      "skills": ["skill:research"],
+      "agent_eligible": true
+    }
+  ],
   "links": ["https://github.com/MultiAgency/kanban/blob/main/SPEC.md#implementation-notes"]
 }
 ```
@@ -33,16 +41,29 @@ Notes for downstream readers go below the fence as free-form prose. The parser i
 
 ## Fields
 
-All four fields are optional. Include only those that apply.
+All five fields are optional. Include only those that apply.
 
-| Field           | Type       | Purpose                                                                                                           |
-| --------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| `changed_files` | `string[]` | Paths touched by this work, relative to the repository root. Omit if work was conceptual (e.g., a research note). |
-| `verification`  | `string[]` | Commands or manual checks downstream readers can run to confirm the work behaves as claimed.                      |
-| `residual_risk` | `string[]` | Things this work did not cover, edge cases left open, follow-ups worth filing as new issues.                      |
-| `links`         | `string[]` | URLs to related documents, prior handoffs, external references.                                                   |
+| Field           | Type         | Purpose                                                                                                                                                                                                                                          |
+| --------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `changed_files` | `string[]`   | Paths touched by this work, relative to the repository root. Omit if work was conceptual (e.g., a research note).                                                                                                                                |
+| `verification`  | `string[]`   | Commands or manual checks downstream readers can run to confirm the work behaves as claimed.                                                                                                                                                     |
+| `residual_risk` | `string[]`   | Prose acknowledgment of things this work did not cover. Free-form — use for notes that don't warrant their own issue.                                                                                                                            |
+| `follow_ups`    | `FollowUp[]` | Structured request for new issues to be filed. The dependency-promotion Action materializes each entry as a new issue at parent-close time, body-linked to the parent. Each entry: `{title, body, skills?, agent_eligible?}` — see Action below. |
+| `links`         | `string[]`   | URLs to related documents, prior handoffs, external references.                                                                                                                                                                                  |
 
-New top-level fields are not allowed in v0 — the format is byte-identical to SPEC and shared between the v0 Action's `parseHandoff` and the v1 application's parser. Format evolution is additive only (v1 may add fields that v0 readers tolerate; existing fields cannot change shape).
+The format is additive: existing fields cannot change shape, but new optional fields may be added (`follow_ups` was added in this manner). The v0 Action's `parseHandoff` and the v1 application's parser stay in sync via byte-identical schema.
+
+### Follow-up issue authoring
+
+When an agent's handoff includes `follow_ups`, the dependency-promotion Action (running on `issues.closed` for the parent) creates one new GitHub issue per well-formed entry:
+
+- **Title:** the entry's `title`.
+- **Body:** the entry's `body`, with `\n\n- [ ] #parent` appended so the convention's dependency parser sees the parent reference. The Action treats the parent as already-closed (it just closed!) when evaluating the new issue's eligibility.
+- **Labels:** `ready` always; each string in `skills` (e.g., `skill:research`); `agent-eligible` when `agent_eligible: true`.
+- **Malformed entries** (missing `title` or `body`, wrong types) are dropped silently at parse time. Well-formed entries in the same handoff are still processed.
+- **Per-entry create failures** (rate limit, transient API error) are warned and skipped; subsequent entries continue.
+
+Use `follow_ups` when the residual is concrete and ready to be discrete work. Use `residual_risk` (string prose) when the residual is acknowledgment without an actionable shape.
 
 ## Parser rules
 

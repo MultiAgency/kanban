@@ -42,10 +42,10 @@ A misconfigured label-thrashing scenario (e.g., an automation that toggles `read
 
 ## When to use reactive vs cron
 
-- **Cron** (`docs/routines/cron-setup.md`) needs no external infrastructure beyond the IronClaw daemon. Latency: 0–5 minutes from label change to claim. Under the default routine model (`gpt-oss-120b`), reliability is bounded by Findings 26/28/29 in the tracer doc — the work-execution phase is brittle.
+- **Cron** (`docs/routines/cron-setup.md`) needs no external infrastructure beyond the IronClaw daemon. Latency: 0–5 minutes from label change to claim. Under the default routine model (`gpt-oss-120b`), residual failure modes are mid-cycle stalls and occasional placeholder-leak commits (Findings 26/28/30) — full-cycle reliability per fire is partial but recoverable.
 - **Reactive** (this doc) drops claim latency to seconds and sidesteps the cron path's candidate-discovery loop because the webhook payload names the specific issue up-front. Costs: the Worker, GitHub webhook config, two HMAC secrets to manage. Worth it for the canonical roadmap and any project where claim latency matters.
 
-The current `MultiAgency/kanban` repo runs the reactive substrate; the cron path is benched until model substitution closes the work-execution gap.
+The current `MultiAgency/kanban` repo runs both substrates. See [`docs/routines/README.md`](README.md) for the side-by-side comparison and the half-state-repair caveat under "Running both."
 
 ## Verifying the substrate is working
 
@@ -53,7 +53,7 @@ GitHub's webhook delivery dashboard (`Settings → Webhooks → click the webhoo
 
 - Watch `ironclaw logs --follow` on the daemon host for the matching prompt arrival
 - Confirm the kanban-worker skill activated (look for the skill's signature output in the agent's response)
-- Confirm the agent reached the claim ritual (assignee + label swap on the issue) — this is the proven floor under the current model per Finding 28
+- Confirm the agent reached the claim ritual (assignee + label swap on the issue) — under the current model this is reliable; the work-execution phase (file commit + handoff + close) lands fully on most fires but occasionally stalls mid-cycle (see Finding 30 and the cron-setup half-state notes)
 
 If GitHub shows green but no prompt arrives at the daemon, the HMAC re-signing or the `HTTP_WEBHOOK_SECRET` env var is the place to look. If the prompt arrives but no agent activation follows, the skill isn't installed or the prompt isn't matching its activation keywords.
 

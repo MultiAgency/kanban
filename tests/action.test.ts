@@ -4,6 +4,8 @@ import {
   promote,
   allParentsClosed,
   discoverChildren,
+  createFollowUps,
+  fetchHandoffComment,
   run,
   type CandidateChild,
   type GhClient,
@@ -11,6 +13,9 @@ import {
 
 const stub = (overrides: Record<string, unknown>): GhClient => overrides as unknown as GhClient;
 const ref = { owner: "MultiAgency", repo: "kanban" };
+
+const handoffComment = (json: string): string =>
+  ["**Handoff:** test", "", "```handoff", json, "```"].join("\n");
 
 describe("confirmParents", () => {
   it("keeps candidates whose body declares the parent via checklist", () => {
@@ -260,7 +265,13 @@ describe("run", () => {
     const octokit = stub({
       rest: {
         search: { issuesAndPullRequests: search },
-        issues: { get, removeLabel, addLabels },
+        issues: {
+          get,
+          removeLabel,
+          addLabels,
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          create: vi.fn(),
+        },
       },
     });
     await run(octokit, ref, 5);
@@ -280,7 +291,13 @@ describe("run", () => {
     const octokit = stub({
       rest: {
         search: { issuesAndPullRequests: search },
-        issues: { get: vi.fn(), removeLabel, addLabels },
+        issues: {
+          get: vi.fn(),
+          removeLabel,
+          addLabels,
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          create: vi.fn(),
+        },
       },
     });
     await run(octokit, ref, 5);
@@ -304,10 +321,180 @@ describe("run", () => {
     const octokit = stub({
       rest: {
         search: { issuesAndPullRequests: search },
-        issues: { get, removeLabel, addLabels },
+        issues: {
+          get,
+          removeLabel,
+          addLabels,
+          listComments: vi.fn().mockResolvedValue({ data: [] }),
+          create: vi.fn(),
+        },
       },
     });
     await run(octokit, ref, 5);
     expect(removeLabel).not.toHaveBeenCalled();
+  });
+
+  it("files follow_ups from the closed issue's handoff before promotion", async () => {
+    const search = vi.fn().mockResolvedValue({ data: { total_count: 0, items: [] } });
+    const listComments = vi.fn().mockResolvedValue({
+      data: [
+        {
+          body: handoffComment(
+            '{"follow_ups":[{"title":"FollowUp","body":"context","skills":["skill:research"],"agent_eligible":true}]}',
+          ),
+        },
+      ],
+    });
+    const create = vi.fn().mockResolvedValue({ data: { number: 99 } });
+    const order: string[] = [];
+    listComments.mockImplementation(async () => {
+      order.push("listComments");
+      return {
+        data: [
+          {
+            body: handoffComment('{"follow_ups":[{"title":"FollowUp","body":"context"}]}'),
+          },
+        ],
+      };
+    });
+    create.mockImplementation(async () => {
+      order.push("create");
+      return { data: { number: 99 } };
+    });
+    search.mockImplementation(async () => {
+      order.push("search");
+      return { data: { total_count: 0, items: [] } };
+    });
+    const octokit = stub({
+      rest: {
+        search: { issuesAndPullRequests: search },
+        issues: { listComments, create, get: vi.fn(), removeLabel: vi.fn(), addLabels: vi.fn() },
+      },
+    });
+    await run(octokit, ref, 5);
+    expect(create).toHaveBeenCalledOnce();
+    expect(order.indexOf("create")).toBeLessThan(order.indexOf("search"));
+  });
+});
+
+describe("fetchHandoffComment", () => {
+  it("returns the body of the last comment carrying a handoff fence", async () => {
+    const listComments = vi.fn().mockResolvedValue({
+      data: [
+        { body: "first comment" },
+        { body: handoffComment('{"changed_files":["older.ts"]}') },
+        { body: "interleaved prose" },
+        { body: handoffComment('{"changed_files":["newer.ts"]}') },
+        { body: "trailing thought" },
+      ],
+    });
+    const octokit = stub({ rest: { issues: { listComments } } });
+    const body = await fetchHandoffComment(octokit, ref, 42);
+    expect(body).toContain('"newer.ts"');
+    expect(body).not.toContain('"older.ts"');
+  });
+
+  it("returns empty string when no comment carries a fence", async () => {
+    const listComments = vi
+      .fn()
+      .mockResolvedValue({ data: [{ body: "no handoff" }, { body: null }] });
+    const octokit = stub({ rest: { issues: { listComments } } });
+    expect(await fetchHandoffComment(octokit, ref, 1)).toBe("");
+  });
+
+  it("returns empty string and warns when listComments errors", async () => {
+    const listComments = vi.fn().mockRejectedValue({ status: 403, message: "forbidden" });
+    const octokit = stub({ rest: { issues: { listComments } } });
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+
+    expect(await fetchHandoffComment(octokit, ref, 1)).toBe("");
+    expect(writes.some((w) => /::warning::.*unable to fetch comments/.test(w))).toBe(true);
+
+    writeSpy.mockRestore();
+  });
+});
+
+describe("createFollowUps", () => {
+  it("creates one issue per valid follow_up with body-link and labels", async () => {
+    const create = vi.fn().mockResolvedValueOnce({ data: { number: 101 } });
+    const octokit = stub({ rest: { issues: { create } } });
+    const body = handoffComment(
+      '{"follow_ups":[{"title":"T","body":"B","skills":["skill:research","skill:writing"],"agent_eligible":true}]}',
+    );
+
+    const created = await createFollowUps(octokit, ref, 42, body);
+
+    expect(created).toEqual([101]);
+    expect(create).toHaveBeenCalledWith({
+      owner: "MultiAgency",
+      repo: "kanban",
+      title: "T",
+      body: "B\n\n- [ ] #42",
+      labels: ["ready", "skill:research", "skill:writing", "agent-eligible"],
+    });
+  });
+
+  it("omits agent-eligible label when follow_up.agent_eligible is false or absent", async () => {
+    const create = vi.fn().mockResolvedValue({ data: { number: 200 } });
+    const octokit = stub({ rest: { issues: { create } } });
+    const body = handoffComment('{"follow_ups":[{"title":"T","body":"B"}]}');
+
+    await createFollowUps(octokit, ref, 7, body);
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ labels: ["ready"] }));
+  });
+
+  it("returns empty array when no follow_ups field present", async () => {
+    const create = vi.fn();
+    const octokit = stub({ rest: { issues: { create } } });
+    const body = handoffComment('{"changed_files":["x.ts"]}');
+
+    expect(await createFollowUps(octokit, ref, 1, body)).toEqual([]);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("returns empty array when handoff fence is absent", async () => {
+    const create = vi.fn();
+    const octokit = stub({ rest: { issues: { create } } });
+
+    expect(await createFollowUps(octokit, ref, 1, "no fence here")).toEqual([]);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("continues past per-entry failures and warns instead of aborting", async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { number: 301 } })
+      .mockRejectedValueOnce({ status: 422, message: "validation failed" })
+      .mockResolvedValueOnce({ data: { number: 303 } });
+    const octokit = stub({ rest: { issues: { create } } });
+    const body = handoffComment(
+      `{"follow_ups":[
+        {"title":"A","body":"a"},
+        {"title":"B","body":"b"},
+        {"title":"C","body":"c"}
+      ]}`,
+    );
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+        return true;
+      });
+
+    const created = await createFollowUps(octokit, ref, 42, body);
+
+    expect(created).toEqual([301, 303]);
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(writes.some((w) => /::warning::.*follow_up.*failed to create/.test(w))).toBe(true);
+
+    writeSpy.mockRestore();
   });
 });

@@ -19,11 +19,19 @@ The convention is durable. A hosted application built on the same convention is 
 
 1. On GitHub, click **Use this template** (top-right of the repo page) and name your fork.
 2. Apply the canonical labels in [`.github/labels.yml`](.github/labels.yml) to your fork — run `gh label create` from the YAML once at fork time.
-3. Configure an IronClaw cron routine pointed at your fork — follow [`docs/routines/cron-setup.md`](docs/routines/cron-setup.md). Your first agent tick fires within five minutes.
+3. Point an IronClaw substrate at your fork. Two ways, both verified end-to-end — see [`docs/routines/`](docs/routines/) for the comparison and pick one (or run both):
+   - [`docs/routines/reactive-setup.md`](docs/routines/reactive-setup.md) — webhook-driven; agent claims within a minute of the `ready` label being added.
+   - [`docs/routines/cron-setup.md`](docs/routines/cron-setup.md) — cron-driven; agent ticks every five minutes through eligible issues. Useful for backlog processing and for environments where the GitHub webhook can't reach your IronClaw instance.
 
 The dependency-promotion Action runs automatically on `issues.closed` events; no separate setup is needed for it once the fork exists.
 
-The cron substrate is the canonical, verified v0 path. The reactive webhook substrate is documented in [`docs/routines/reactive-setup.md`](docs/routines/reactive-setup.md) but its end-to-end runtime support is deferred to v0.1 — see [SPEC.md §Deferred to v0.1 #6](SPEC.md). Setup notes for IronClaw v0.28.0 quirks live in [`CHANGELOG.md`](CHANGELOG.md) under the v0.0.1 entry.
+Setup notes for IronClaw v0.28.0 quirks live in [`CHANGELOG.md`](CHANGELOG.md) under the v0.0.1 entry.
+
+## Scaffolding a roadmap
+
+Forking the convention's infrastructure gives you the substrate; the next question is what issues to seed your board with. The scaffold prompt at [`docs/scaffolding/v1-to-roadmap.md`](docs/scaffolding/v1-to-roadmap.md) takes a fork-user's [`v1.yaml`](roadmap/v1.yaml.example) (product vision, primary user, must-have capabilities, deployment target, cadence preference) and produces a `roadmap.yaml` ready for `npm run push-roadmap`. Detail decays with release distance — v0.0.1 issues get full bodies, v0.1.0 issues get 1–2 sentence sketches, later releases are title-only skeletons until the work approaches.
+
+See [`docs/scaffolding/worked-example.yaml`](docs/scaffolding/worked-example.yaml) for an illustrative output. The IronClaw skill wrapper is at [`skills/kanban-scaffolder/SKILL.md`](skills/kanban-scaffolder/SKILL.md). For operating the scaffolded roadmap with senior-engineering process — and for why the convention's structured fields compound into a queryable context graph as work closes — see [`docs/scaffolding/recommended-workflow.md`](docs/scaffolding/recommended-workflow.md).
 
 ## Where to go next
 
@@ -36,6 +44,7 @@ The cron substrate is the canonical, verified v0 path. The reactive webhook subs
 | [`PLAN.md`](PLAN.md), [`TASKS.md`](TASKS.md)                     | v0 implementation plan and discrete task breakdown.           |
 | [`CLAUDE.md`](CLAUDE.md)                                         | Context for Claude Code sessions.                             |
 | [`roadmap/v1-issues.yaml`](roadmap/v1-issues.yaml)               | v1 application roadmap — source of truth for the live issues. |
+| [`docs/scaffolding/v1-to-roadmap.md`](docs/scaffolding/v1-to-roadmap.md) | Scaffold prompt for fork users — `v1.yaml` → `roadmap.yaml`.  |
 
 ## Watching the agent work
 

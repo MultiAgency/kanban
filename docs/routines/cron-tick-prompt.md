@@ -1,6 +1,6 @@
 # Cron-tick prompt (procedural form)
 
-The IronClaw routine prompt used by `kanban-tick` to claim and complete one issue per fire. Written as an explicit step-by-step procedure rather than a natural-language description because the routine model in current use (`openai/gpt-oss-120b`) is unreliable at picking the right tool / parameter / order from a higher-level instruction. Stronger models (Claude, GPT-4-class) tolerate a shorter natural-language prompt.
+The IronClaw routine prompt used by `kanban-tick` to claim and complete one issue per fire. Written as an explicit step-by-step procedure rather than a natural-language description because the current default routine model (`openai/gpt-oss-120b`) needs tool calls and parameters spelled out — vague-prompt forms produce noticeably more stalls. Stronger models (Claude, GPT-4-class) tolerate a shorter natural-language prompt.
 
 This prompt encodes three working assumptions about the github WASM tool:
 
@@ -28,7 +28,7 @@ The github WASM tool is missing `add_assignees`, `add_labels`, `remove_label`, a
 4. CLAIM RITUAL via http (three calls in this order — add labels BEFORE removing ready, recoverable failure mode):
    a. http(method=PATCH, url=https://api.github.com/repos/MultiAgency/kanban/issues/N, body={"assignees":["jlwaugh"]}, headers={"Accept":"application/vnd.github+json","User-Agent":"ironclaw-kanban-worker"})
    b. http(method=POST, url=https://api.github.com/repos/MultiAgency/kanban/issues/N/labels, body=["in-progress"], headers={"Accept":"application/vnd.github+json","User-Agent":"ironclaw-kanban-worker"})
-      The body MUST be a bare JSON array `["in-progress"]`, NOT a wrapped object `{"labels":["in-progress"]}`. The wrapped form fails GitHub's schema validation ("No subschema in anyOf matched") — see Findings 23/26/30.
+      The argument name MUST be `body=`, not `json=` — IronClaw's http tool schema declares `body` and silently drops unrecognized argument keys, so `json=[...]` sends an empty body to GitHub (Finding 30).
    c. http(method=DELETE, url=https://api.github.com/repos/MultiAgency/kanban/issues/N/labels/ready, headers={"Accept":"application/vnd.github+json","User-Agent":"ironclaw-kanban-worker"})
    If any of (a) (b) (c) fail, write "claim ritual failed at step N" and exit; do not proceed.
 
@@ -60,10 +60,10 @@ If you adopt this prompt for a different kanban-conventional repo:
 
 ## Known limits under `openai/gpt-oss-120b`
 
-Even with the procedural form, the routine model fails on roughly three-quarters of fires. The dominant failure modes (each described in `docs/ironclaw-tracer-outcome.md`):
+The procedural form produces successful end-to-end fires; the residual failure modes (each described in `docs/ironclaw-tracer-outcome.md`) are:
 
-- **Finding 26 — placeholder leak.** The model occasionally emits `<path-from-issue-body>` and similar bracket-template strings as literal tool arguments instead of substituting real values. A `.github/workflows/no-cruft.yml` CI check rejects any commit whose changed paths contain `<` or `>` to keep this from accumulating.
-- **Finding 26 (continued) — `POST /issues/N/labels` schema validation.** The model sometimes formats the body wrong against the GitHub REST schema. Recoverable manually but un-fixable by prompt alone.
+- **Finding 26 — placeholder leak.** The model occasionally emits `<path-from-issue-body>` and similar bracket-template strings as literal tool arguments instead of substituting real values, producing cruft commits at the placeholder path. The `[FILL: name]` distinctive-marker form in this prompt reduces the rate; `.github/workflows/no-cruft.yml` rejects any commit whose paths contain `<` or `>` as a backstop.
+- **Mid-cycle stalls.** A fire may complete the claim ritual + commit the work file but then skip the handoff comment or close step, leaving an `in-progress` half-state on the issue. Step 2's condition (e) excludes `in-progress` from new claims, so the next cron tick will skip the half-state issue rather than repair it. Manual repair (toggle `ready` off-then-on to re-fire the webhook substrate, or just close + handoff by hand) is currently required. A dedicated repair routine is a v0.1.x work item.
 - **Finding 25 — `action_type=full_job` deserialization breakage.** Setting the routine to `full_job` via direct DB edit without `title`, `description`, and `max_iterations` set crashes the routines table parser globally. Use `ironclaw routines edit` with all required fields, or stay on lightweight mode.
 
-The webhook substrate (`docs/routines/reactive-setup.md`) was built in part because these failure modes were already documented and the cron path's reliability is gated on either (a) a more capable model or (b) the upstream PR adding the missing primitives to the github WASM tool. The procedural prompt is the best-known cron-path prompt under current conditions, not a recommendation that cron is production-shape today.
+The webhook substrate (`docs/routines/reactive-setup.md`) complements the cron path by responding within seconds of a `ready` label being added. Run both together: the webhook absorbs new work as events arrive, the cron tick picks up the backlog and any issue whose webhook delivery missed.

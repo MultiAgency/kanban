@@ -114,7 +114,27 @@ Worked example:
 Notes for downstream readers go below the fence as free-form prose. The parser ignores everything outside the first `handoff` fence.
 ````
 
-All four JSON fields are optional — include only those that apply. New top-level fields are not allowed in v0; the format is byte-identical to the spec and shared by the v0 Action and (in v1) the hosted application.
+All five JSON fields are optional — include only those that apply. The format is byte-identical to the spec and shared by the v0 Action and (in v1) the hosted application; new fields are added additively (current additive: `follow_ups`).
+
+### Filing follow-ups
+
+When this work surfaces residuals that are concrete enough to be discrete next-issues (not just acknowledgments), emit them as `follow_ups` rather than (or in addition to) `residual_risk`. Each entry materializes as a new GitHub issue at close-time via the dependency-promotion Action — body-linked back to this parent, labeled `ready` + the listed skills, optionally `agent-eligible`. Worked example:
+
+```handoff
+{
+  "changed_files": ["docs/research/adr-0002-sse-over-websockets.md"],
+  "follow_ups": [
+    {
+      "title": "Revisit SSE vs WebSockets when bidirectional presence is needed",
+      "body": "ADR-0002 chose SSE on the basis that v1 presence is server-push only. If/when a v1.x feature requires client→server presence streaming, this ADR's rationale needs revisiting.",
+      "skills": ["skill:research"],
+      "agent_eligible": true
+    }
+  ]
+}
+```
+
+When in doubt: use `residual_risk` for prose acknowledgment, `follow_ups` for structured "this should become an issue." Don't duplicate — pick one shape per residual.
 
 ## Soft inputs
 

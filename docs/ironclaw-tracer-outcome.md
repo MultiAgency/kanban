@@ -122,7 +122,7 @@ Findings (from the watched demo and the activation probes leading up to it):
 
 For each step of the eligibility-check + claim-ritual + work + handoff + close pipeline, recording the 2026-05-10 watched demo outcome:
 
-- [N/A] Tick fired on schedule — demo used live REPL, not a cron routine. Cron-tick verification deferred to v0.1.
+- [N/A] Tick fired on schedule — demo used live REPL, not a cron routine. Cron-tick verification banked in v0.1.1 via the `kanban-tick` routine producing real ADR commits per fire on `MultiAgency/kanban` (see Finding 30 and the v0.1.1 CHANGELOG entry).
 - [x] Agent listed issues in `MultiAgency/test` and filtered correctly on `ready` + `agent-eligible` + skill labels — issue #1 surfaced with labels `ready, agent-eligible, skill:writing`.
 - [x] Agent identified seed issue #1 as eligible (Rule 6 four-condition AND) — explicitly walked all four conditions, all green.
 - [x] Agent performed the claim ritual atomically — self-assigned + added `in-progress` + removed `ready`.

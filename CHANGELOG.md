@@ -7,41 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v0.1.1
 
-Post-v0.1.0 honesty pass: substrate works end-to-end at the transport + eligibility + claim-ritual layers; work-execution under the default model (`openai/gpt-oss-120b` via NEAR AI) hits prompt-resistant delegation preferences that require model substitution to fully close.
+Post-v0.1.0 honesty pass: an apparent "model fabricates completion narration" failure mode turned out to be an IronClaw http-tool parameter-name mismatch (`json=` in prompts vs. `body=` in tool schema — Finding 30). After the fix, the reactive substrate closed `MultiAgency/kanban#40` end-to-end (claim → ADR commit → handoff → close) and the cron `kanban-tick` routine produced a real ADR commit on a fresh fire against #21. The cron fire on #21 stalled before posting the handoff comment and close, leaving an `in-progress` half-state — representative of the residual mid-cycle stall rate under the default model. Both substrates run alongside each other safely: cron's step-2 condition (e) excludes `in-progress` so it cannot race a webhook fire-in-flight.
 
 ### What's new for fork users
 
-- **F26 placeholder-leak mitigation via distinctive marker sweep.** `docs/routines/cron-tick-prompt.md` had an agent-facing prompt surface with `<...>` placeholder syntax. Sweep replaced these with the visually-distinctive `[FILL: name]` pattern in both the doc and the matching `kanban-tick` routine row in IronClaw's DB (`routines.action_config.description`, applied via `ironclaw routines edit`). Any tool-call argument containing `[FILL:` is now trivially-detectable as a leak — both by eye in review and by the new `.github/workflows/no-cruft.yml` CI check (which rejects paths containing `<` or `>`). Post-sweep agent runs against `MultiAgency/kanban#41` and `#40` (`agent_jobs.source=direct`/`sandbox`, not webhook-dispatched routine fires — see Finding 28 caveat) showed no new placeholder-named commits on `origin/main`.
+- **F26 placeholder-leak partial mitigation via distinctive marker sweep.** `docs/routines/cron-tick-prompt.md` had an agent-facing prompt surface with `<...>` placeholder syntax. Sweep replaced these with the visually-distinctive `[FILL: name]` pattern in both the doc and the matching `kanban-tick` routine row in IronClaw's DB (`routines.action_config.description`, applied via `ironclaw routines edit`). The marker form reduces leak rate but doesn't eliminate it — tonight's cron tick still produced one `<output_path>` cruft commit alongside its real ADR commit on #21. The structural backstop is `.github/workflows/no-cruft.yml` (rejects commits whose changed paths contain `<` or `>`); the workflow is staged and lands with this release.
 
 ### Findings recorded against IronClaw v0.28.0
 
-Two new findings in [`docs/ironclaw-tracer-outcome.md`](docs/ironclaw-tracer-outcome.md), documenting the boundary of prompt-engineering versus model substitution:
+Three findings in [`docs/ironclaw-tracer-outcome.md`](docs/ironclaw-tracer-outcome.md):
 
-- **Finding 28** — `gpt-oss-120b`'s `create_job` delegation preference is prompt-resistant. Two independent mitigation attempts (verification-gate directive in the routine prompt, `tool_permissions.create_job = ask_each_time`) each tested via a fresh agent run instructed against `MultiAgency/kanban#40`; each closed *part* of the surface (claim ritual now fires inline) but none prevented the delegation invocation in the work-execution phase. Threshold for "prompt-around-it is cheaper than model swap" crossed. v0.1.1 work item: comparative evaluation of Claude / GPT-4 / Gemini / Ollama candidates on the same prompt.
-- **Finding 29** — `tool_permissions.<tool>` set to `ask_each_time` does NOT block tool calls in headless agent contexts. Empirically, an `ask_each_time` permission is effectively `always_allow` for direct/sandbox agent runs (and presumably for cron-fired routines and http-channel routines whenever those dispatch) because no human is attached to the prompt. Implication: the permission model isn't a structural block for autonomous flows; fork users wanting to restrict an agent's tool palette in non-interactive contexts need to either omit the tool from the installed skill set or wrap dispatch with a validation layer. Upstream candidate: a `tool_permissions.<tool>: deny` value that hard-blocks regardless of channel.
+- **Finding 28** — `gpt-oss-120b`'s `create_job` delegation preference under vague-prompt forms. The procedurally-explicit Worker prompt (`worker/src/index.ts` translateToPrompt) eliminated the delegation entirely: zero `create_job` calls observed across both webhook and cron fires after the port. Vague-prompt forms still produce the delegation pattern.
+- **Finding 29** — `tool_permissions.<tool>` set to `ask_each_time` does NOT block tool calls in headless agent contexts. Empirically, an `ask_each_time` permission is effectively `always_allow` for non-interactive agent runs because no human is attached to the prompt. Implication: the permission model isn't a structural block for autonomous flows; fork users wanting to restrict an agent's tool palette in non-interactive contexts need to either omit the tool from the installed skill set or wrap dispatch with a validation layer. Upstream candidate: a `tool_permissions.<tool>: deny` value that hard-blocks regardless of channel.
+- **Finding 30** — Prompt/tool parameter-name mismatch silently drops the http request body. IronClaw's built-in `http` tool schema declares `body` as its body parameter; the Worker prompt and `AGENTS.md` examples had `json=` / `"json": [...]`. IronClaw silently dropped the unrecognized key, GitHub received an empty body and rejected with `"nil is not an array"`, and the model bailed into completion-narration after two consecutive errors. The bug was the host layer, not the model. After the one-line fix (`json=` → `body=` in `worker/src/index.ts` and four AGENTS.md examples), the webhook substrate closed #40 end-to-end and the cron substrate produced a substantive ADR commit on a fresh fire against #21.
 
 ### Honest autonomous-loop assessment
 
-Disentangling what's proven, what's configured-but-unverified, and what's brittle (consistent with the Phase 9 honesty correction in `docs/ironclaw-tracer-outcome.md`):
+Both substrates exercised against `MultiAgency/kanban` (the canonical roadmap repo, not just `MultiAgency/test`):
 
-**Proven:**
+- **Reactive path — full cycle.** `MultiAgency/kanban#40` (`ADR: SSE over WebSockets`) closed end-to-end: webhook → Worker → IronClaw HTTP channel → kanban-worker agent → claim ritual → `docs/research/adr-0002-sse-over-websockets.md` committed (`8d55de5`) → parseable handoff comment → issue closed with `state_reason=completed`. Single fire, no human in the loop.
+- **Cron path — partial cycle.** `kanban-tick` routine at `0 */5 * * * *` fired against issue #21 and committed `docs/integration/0000-philosophy.md` (`ddee816`, 32 lines of real content) in tick `8aeca935` on 2026-05-13 07:30. The same fire also produced one placeholder-leak commit (`<output_path>` cruft) — the kind the staged `no-cruft.yml` CI gate will reject once it lands on main. The fire stalled before posting the handoff comment and closing the issue, leaving #21 in an `in-progress` half-state.
 
-- GitHub `issues` webhook delivery → Worker HMAC validation → Worker forwarding to IronClaw (`X-Hub-Signature-256`) → IronClaw returns 200 OK ✓ — visible in GitHub's webhook-delivery dashboard for both `MultiAgency/test` and `MultiAgency/kanban`
-- Agent reading an issue body, evaluating Rule 6 four-condition eligibility, executing the claim ritual inline (`PATCH /issues/N` with assignees, `POST /issues/N/labels`, `DELETE /issues/N/labels/ready`), and producing the `ready` → `in-progress` + assignee state transition ✓ — observed under `agent_jobs.source` = `direct`/`sandbox`, i.e. agents invoked manually via `ironclaw run` or single-message mode against a specific issue number
-
-**Configured but unverified:**
-
-- IronClaw routine dispatch from a webhook event to an agent invocation — `routine_runs` records zero `trigger_type=webhook` fires in this deployment. The Worker → IronClaw HTTP hop succeeds, but the existing `kanban-test` webhook routine has placeholder config (`prompt="echo"`, `trigger_config={"path":null,"secret":null}`) and never matches a forward. Closing this loop is a v0.1.x work item.
-
-**Brittle:**
-
-- The work-execution phase of the ritual (ADR file via `create_or_update_file`, handoff comment via `create_issue_comment`, close via `PATCH state=closed`) under `gpt-oss-120b`. Per Finding 28, the model prefers to delegate via `create_job` to a sandboxed sub-job that lacks the github tool, then narrates completion based on the delegation assumption rather than the actual GitHub state. This is the bottleneck v0.1.1 needs to address — by model substitution, since prompt-engineering threshold is now exhausted.
-
-**Net for fork users adopting today:** the convention's claim ritual is reliable; the work-execution phase produces half-states (assignee + `in-progress` label, no deliverable) under the default routine model. Operate the substrate, watch for the half-state pattern, complete the work manually, and wait for v0.1.1's model-selection guidance.
+A non-trivial fraction of fires under `gpt-oss-120b` still stall mid-cycle (commit lands, handoff or close doesn't). Cron's step-2 condition (e) excludes `in-progress` so the two substrates don't race — but the same exclusion means cron does not currently repair half-states. Manual repair (toggle `ready` to re-fire the webhook substrate, or finish the cycle by hand) is required until a dedicated repair routine lands. Both a repair routine and a comparative model evaluation are on the v0.1.x track.
 
 ### Versioning
 
-Use `MultiAgency/kanban@v0` for latest-within-major. v0.1.1 will be tagged once the model-selection question has empirical comparison data; for now, the v0 floating tag remains at v0.1.0's commit (`e3520df`).
+Use `MultiAgency/kanban@v0` for latest-within-major. v0.1.1 will be tagged once this entry is finalized; for now, the v0 floating tag remains at v0.1.0's commit (`e3520df`).
 
 ## [Unreleased] — v0.1
 

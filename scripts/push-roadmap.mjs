@@ -242,7 +242,7 @@ for (const entry of entries) {
 // ---- Write mapping file for inspection ----
 const mappingPath = dryRun ? `${repoRoot}/roadmap/.id-to-number.dry-run.json` : mappingPathLive;
 const mapping = Object.fromEntries(idToNumber);
-writeFileSync(mappingPath, JSON.stringify(mapping, null, 2) + "\n");
+writeFileSync(mappingPath, `${JSON.stringify(mapping, null, 2)}\n`);
 console.error(`==> Wrote mapping to ${mappingPath}`);
 
 console.error(`\n==> Done. ${entries.length} entries processed against ${repo}.`);

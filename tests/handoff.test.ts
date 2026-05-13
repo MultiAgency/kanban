@@ -52,8 +52,7 @@ describe("parseHandoff", () => {
   });
 
   it("tolerates trailing prose after the fence", () => {
-    const body =
-      handoffBlock('{"links":["https://x"]}') + "\n\nSome reflection paragraph after the handoff.";
+    const body = `${handoffBlock('{"links":["https://x"]}')}\n\nSome reflection paragraph after the handoff.`;
     expect(parseHandoff(body)).toEqual({ links: ["https://x"] });
   });
 
@@ -79,5 +78,55 @@ describe("parseHandoff", () => {
     expect(parsed).not.toBeNull();
     expect(parsed?.links).toBeDefined();
     expect(parsed?.links?.some((u) => /MultiAgency\/test\/issues\/4/.test(u))).toBe(true);
+  });
+
+  it("parses follow_ups with all subfields", () => {
+    const body = handoffBlock(
+      '{"follow_ups":[{"title":"t","body":"b","skills":["skill:research"],"agent_eligible":true}]}',
+    );
+    expect(parseHandoff(body)).toEqual({
+      follow_ups: [{ title: "t", body: "b", skills: ["skill:research"], agent_eligible: true }],
+    });
+  });
+
+  it("parses follow_ups with only required fields", () => {
+    const body = handoffBlock('{"follow_ups":[{"title":"t","body":"b"}]}');
+    expect(parseHandoff(body)).toEqual({
+      follow_ups: [{ title: "t", body: "b" }],
+    });
+  });
+
+  it("drops follow_ups field when value is not an array", () => {
+    const body = handoffBlock('{"follow_ups":"not an array","links":["x"]}');
+    expect(parseHandoff(body)).toEqual({ links: ["x"] });
+  });
+
+  it("drops malformed follow_up entries; keeps valid ones", () => {
+    const body = handoffBlock(
+      `{"follow_ups":[
+        {"title":"valid","body":"ok"},
+        {"title":"","body":"empty title"},
+        {"body":"missing title"},
+        {"title":"no body"},
+        {"title":"bad skills","body":"x","skills":"not-array"},
+        {"title":"bad eligible","body":"x","agent_eligible":"yes"},
+        "not an object",
+        null,
+        {"title":"also valid","body":"ok2","skills":["skill:writing"]}
+      ]}`,
+    );
+    expect(parseHandoff(body)).toEqual({
+      follow_ups: [
+        { title: "valid", body: "ok" },
+        { title: "also valid", body: "ok2", skills: ["skill:writing"] },
+      ],
+    });
+  });
+
+  it("drops follow_ups field entirely when all entries are malformed", () => {
+    const body = handoffBlock(
+      '{"follow_ups":[{"title":""},"not an object"],"changed_files":["x.ts"]}',
+    );
+    expect(parseHandoff(body)).toEqual({ changed_files: ["x.ts"] });
   });
 });

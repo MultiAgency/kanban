@@ -91,7 +91,7 @@ Run in order of cost-to-set-up (cheapest first):
 - One IronClaw agent completes a real v1 issue end-to-end on the tagged release
 - Substantive contribution (architecture decision, schema draft, research note, design sketch) — not a synthetic test
 - Closed issue with parseable handoff comment from agent assignee
-- **Substrate banked: cron.** T7.1 ran via the cron substrate on `MultiAgency/test` in v0.0.1 (see `docs/ironclaw-tracer-outcome.md` Phase 6). T6.4 MVP variant followed the same substrate (issues #4 → #5). Reactive substrate deferred to v0.1 — see SPEC.md §Deferred to v0.1 #6.
+- **Substrate banked: cron.** T7.1 ran via the cron substrate on `MultiAgency/test` in v0.0.1 (see `docs/ironclaw-tracer-outcome.md` Phase 6). T6.4 MVP variant followed the same substrate (issues #4 → #5). Reactive substrate landed in v0.1 — see Wave 8 below.
 
 ### Wave 8 — Reactive substrate (v0.1)
 

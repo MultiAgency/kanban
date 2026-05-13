@@ -166,7 +166,7 @@ async function verifyGitHubSignature(
   signature: string | null,
   secret: string,
 ): Promise<boolean> {
-  if (!signature || !signature.startsWith("sha256=")) return false;
+  if (!signature?.startsWith("sha256=")) return false;
   const expected = await hmacSha256Hex(body, secret);
   return timingSafeEqual(signature.slice(7), expected);
 }
