@@ -27,6 +27,11 @@
   color: "5319e7"
   description: hard veto; agents skip even if agent-eligible is also present
 
+# --- Provenance (which routine created the issue) ---
+- name: auto-scaffolded
+  color: "fef2c0"
+  description: "Created by the kanban-scaffold routine; human review required before agent-eligible."
+
 # --- Skills (project-declared via labels) ---
 - name: skill:research
   color: "c5def5"
