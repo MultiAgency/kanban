@@ -820,25 +820,25 @@ The claim-ritual phase of the convention (self-assign via http PATCH, label swap
 
 **Upstream candidate:** add a `tool_permissions.<tool>: deny` or `never_allow` value that hard-blocks the call regardless of channel context (filing as nearai/ironclaw issue is the v0.1.1+ path).
 
-### Finding 30: `gpt-oss-120b` fabricates completion narration after consecutive tool errors — prompt-resistant
+### Finding 30: Prompt/tool parameter-name mismatch silently drops the http body — model fabrication is the symptom, not the cause
 
-**Symptom:** Under the procedurally-explicit Worker prompt (`worker/src/index.ts` translateToPrompt, deployed as version `fbd97c2e`), the kanban-worker agent ran 6 tool calls against #40 — `github(get_issue)` + `http(GET issue)` + `skill_list` + two failed `http(POST /issues/40/labels)` attempts + `http(GET /labels)` — then emitted a single assistant message containing markdown code blocks of the JSON tool-call shapes for steps 5 (commit), 6 (handoff), 7 (close) followed by the literal text **"All steps completed successfully."** None of steps 5/6/7's tools were actually invoked. Issue remained OPEN, no commit, no handoff comment.
+**Symptom:** Under the procedurally-explicit Worker prompt (`worker/src/index.ts` translateToPrompt, deployed as version `fbd97c2e`), the kanban-worker agent ran 6 tool calls against #40 — `github(get_issue)` + `http(GET issue)` + `skill_list` + two failed `http(POST /issues/40/labels)` attempts + `http(GET /labels)` — then emitted a single assistant message containing markdown code blocks of the JSON tool-call shapes for steps 5/6/7 followed by **"All steps completed successfully."** None of steps 5/6/7's tools fired.
 
-**Trigger condition:** the two consecutive label-POST failures (F23/F26-style schema validation errors) appear to push the model from execution mode to narration mode. The model has the correct claim-ritual shapes in the system prompt (AGENTS.md line 18: bare-array `["in-progress"]`) AND in the routine prompt (Worker line 141: `json=["in-progress"]`), but emitted the wrapped form `{"labels":["in-progress"]}` (which `cron-tick-prompt.md` line 30 also documents incorrectly). After two API errors, instead of correcting or stopping, the model fabricated the remaining steps as narrative content.
+**Initial misattribution:** First diagnosed as model-level "narrative-completion fabrication" — that the model bailed into describing-tool-calls-as-content after two consecutive API errors and that prompt-level guards in AGENTS.md ("Execute, don't just draft" / "Verification gate") were ignored. Five rounds of user pushback ("are you sure the model is the problem?") forced a deeper audit.
 
-**Prompt-resistance:** AGENTS.md contains two explicit guards against this exact pattern, both ignored by the model in the same turn:
-- *"Execute, don't just draft. After composing content in your reasoning, you MUST call the side-effecting API tools..."*
-- *"Verification gate before any 'completed' narration. Before composing a response that says you claimed, posted, or closed an issue, the immediately-preceding tool calls in this same turn must show..."*
+**Verified root cause (`/Users/jlwaugh/multi/ironclaw/src/tools/builtin/http.rs` lines 395-435):** The IronClaw built-in `http` tool's JSON Schema declares its request body parameter as **`body`**. There is no `json` parameter in the schema. When the LLM emits an unrecognized argument key, IronClaw silently drops it; the request goes out with no body at all.
 
-**Distinguishing from F28:** F28 is delegation-preference (`create_job` instead of inline `http`/`github` calls). F30 is execution-vs-narration substitution — the agent stops calling tools and starts describing tool calls as content. Both share the prompt-resistance signature. The procedural Worker prompt eliminated F28 (zero `create_job` calls in this run versus three in prior vague-prompt runs) but did not prevent F30.
+Both the Worker prompt (line 141, `json=["in-progress"]`) and AGENTS.md's concrete-shape examples (`"json": [...]` as the body key in four places) directed the model to emit `json=...`. The model obeyed. IronClaw dropped the unrecognized field. GitHub received an empty body and responded `"For 'anyOf/0', nil is not an array."` Two consecutive identical errors and the model gave up tool-calling.
 
-**Mitigation strategies — none verified yet:**
-- **Model substitution.** A stronger model (Claude Sonnet 4.6, GPT-4-class) may honor the existing prompt-level guards. Deferred to v0.1.1 comparative evaluation.
-- **Force `tool_choice=required` for steps 5–7.** Would require routine-layer control over per-turn tool_choice signaling, which IronClaw doesn't currently expose. Upstream PR candidate.
-- **Pre-validate label-POST body in the routine prompt.** Adding one more line clarifying *"emit the body as a bare array `["in-progress"]`, NOT as a wrapped object"* would address the cron-tick-prompt.md regression that triggers F23 → F30 cascade. Cheap; worth trying.
-- **Post-turn server-side verification.** External job that reads the conversation, detects step 5/6/7 narrated-but-not-invoked, and replays the half-state via the convention's own repair mechanism (Rule 2's repair clause). Substantial scope; defer to v0.1.x.
+**The model behavior is downstream of the bug, not the bug.** With the correct parameter name, the first label-POST succeeds and no error cascade happens. No "prompt-resistance" needed; no model swap needed.
 
-**Cross-reference:** F23 (label-POST schema), F26 (`gpt-oss-120b` placeholder leak), F28 (`create_job` delegation preference). F30 is the third independent prompt-resistant failure mode observed in `gpt-oss-120b` and is the strongest case yet for the v0.1.1 comparative-model evaluation.
+**Fix (one-line per file):**
+- `/Users/jlwaugh/multi/kanban/worker/src/index.ts` lines 141, 142, 158 — `json=` → `body=`
+- `/Users/jlwaugh/AGENTS.md` four concrete-shape JSON examples — `"json"` key → `"body"` key
+
+**Pattern note (cross-reference F26, F28):** This is the third substrate issue I initially blamed on `gpt-oss-120b`. F26 (placeholder leak) had a real cause in distinctive-marker absence. F28 (`create_job` preference) had a real cause in vague-prompt language. F30 (this finding) has a real cause in prompt/tool parameter-name mismatch. In each case "model is prompt-resistant" was the wrong story. **Before attributing to the model, verify the host serialization layer:** check IronClaw's tool schema, check that the prompt's parameter names match the schema, check what the tool actually received vs. what GitHub reported.
+
+**Cross-reference:** F23 (label-POST schema — superseded; the real failure was empty body, not wrong shape), F26 (placeholder leak), F28 (`create_job` delegation), F29 (`tool_permissions` headless gap).
 
 ### Finding N: _TBD — populated as future tracer probes surface issues_
 

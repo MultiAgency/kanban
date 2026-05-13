@@ -20,7 +20,7 @@ The github WASM tool is missing `add_assignees`, `add_labels`, `remove_label`, a
    The ascending sort surfaces the lowest-numbered eligible issue first.
    If empty, write "no eligible issue" and exit.
 
-2. PICK THE LOWEST-NUMBERED issue from the list satisfying all four conditions: (a) NOT human-only; (b) HAS agent-eligible; (c) HAS ready; (d) every skill:* label is in {skill:writing, skill:research, skill:code, skill:review, skill:translation}. Process oldest-numbered eligible issues first so dependency-bottom-up coverage emerges naturally. Call N the picked issue number. If none qualify, write "no qualifying issue" and exit.
+2. PICK THE LOWEST-NUMBERED issue from the list satisfying all five conditions: (a) NOT human-only; (b) HAS agent-eligible; (c) HAS ready; (d) every skill:* label is in {skill:writing, skill:research, skill:code, skill:review, skill:translation}; (e) does NOT have `in-progress` (prevents racing the webhook substrate on an issue currently mid-claim). Process oldest-numbered eligible issues first so dependency-bottom-up coverage emerges naturally. Call N the picked issue number. If none qualify, write "no qualifying issue" and exit.
 
 3. READ ISSUE BODY via github WASM:
    github(action=get_issue, owner=MultiAgency, repo=kanban, issue_number=N)
