@@ -4,6 +4,16 @@ How to deploy an IronClaw agent that fires on a cron schedule, picks up `ready` 
 
 > Supersedes the earlier `cron.yaml.example` template. IronClaw doesn't consume YAML routine definitions — routines live in IronClaw's database and are created via CLI or by the agent at chat time.
 
+## Status
+
+The cron substrate is the v0 path and remains runnable. The reactive substrate in `reactive-setup.md` is the canonical v0.1 path: it removes 0–5 minutes of polling latency and side-steps the failure modes described under "Known limits" below. Pick cron when:
+
+- You don't want to operate the Cloudflare Worker adapter that the reactive substrate needs
+- You're on a closed network where the GitHub webhook can't reach your IronClaw instance
+- Latency in the minutes-not-seconds range is fine for your workload
+
+Otherwise, prefer reactive. Skill behavior, claim ritual, handoff format, and eligibility check are identical between the two substrates — only the trigger differs.
+
 ## Prerequisites
 
 - IronClaw runtime installed and onboarded (`ironclaw onboard` completed at least once, `DATABASE_URL` resolvable; see `docs/ironclaw-tracer-outcome.md` for first-time-setup gotchas)
@@ -40,44 +50,36 @@ These default reasonably; set explicitly if your deployment env doesn't already.
 
 ### 3. Create the routine
 
-**Canonical path (per IronClaw docs) — describe to the agent.** Inside `ironclaw run`:
+The routine prompt is checked in at [`docs/routines/cron-tick-prompt.md`](cron-tick-prompt.md). It is an explicit step-by-step procedure — list, pick, read, claim, work, commit, handoff, close — written that way because the routine model in current use needs tool calls and parameters spelled out. That doc also covers forking notes (substituting `MultiAgency/kanban` and the assignee login for your repo) and the known-failure-mode list under the current model. Read it before creating the routine, since it'll surface decisions you'd otherwise hit at first-tick time.
 
-```
-Create a routine named kanban-tick that runs every 5 minutes on the
-6-field schedule "0 */5 * * * *" with cooldown 300 seconds. Prompt:
-Follow the kanban-worker convention on MultiAgency/kanban. Find one
-ready+agent-eligible issue you are qualified for by skill match. Walk
-Rule 6 four-condition eligibility. If green, perform Rule 2 atomic
-claim (self-assign + add in-progress + remove ready), do the work
-substantively, post a handoff comment per docs/handoff-format.md,
-then close the issue. If no eligible issue is available, exit cleanly.
-```
-
-The agent calls `routine_create` and confirms.
-
-**Alternative — direct CLI** (more reproducible for scripting fork-user setups):
+**Direct CLI form** (reproducible, scriptable for fork-user setups):
 
 ```sh
+PROMPT=$(cat docs/routines/cron-tick-prompt.md | awk '/^```$/{f=!f; next} f && /^Procedure/{p=1} p')
 ironclaw routines create \
   --name kanban-tick \
   --schedule '0 */5 * * * *' \
   --cooldown 300 \
-  --prompt 'Follow the kanban-worker convention on MultiAgency/kanban. Find one ready+agent-eligible issue you are qualified for by skill match. Walk Rule 6 four-condition eligibility. If green, perform Rule 2 atomic claim (self-assign + add in-progress + remove ready), do the work substantively, post a handoff comment per docs/handoff-format.md, then close the issue. If no eligible issue is available, exit cleanly.'
+  --prompt "$PROMPT"
 ```
+
+(The `awk` extracts the prompt-block body from the markdown; if you'd rather copy-paste it once, the fenced block in `cron-tick-prompt.md` is the canonical source.)
+
+**Agent-mediated form** — inside `ironclaw run`, paste the prompt block and ask the agent to call `routine_create` with name `kanban-tick`, schedule `0 */5 * * * *`, cooldown `300`, and the pasted prompt body.
 
 Notes on the schedule:
 
 - **6-field cron** — `sec min hour day month weekday`. The leading `0` is for seconds. The five-field form (`*/5 * * * *`) will error.
 - `0 */5 * * * *` fires at the top of every 5th minute. `--cooldown 300` (5 minutes) matches that cadence so a long-running tick can't double-fire. If you change cadence, keep `cooldown >= schedule period`.
 
-### 3. Verify registration
+### 4. Verify registration
 
 ```sh
 ironclaw routines list --trigger cron
 ironclaw routines list --json | jq '.[] | select(.name=="kanban-tick")'
 ```
 
-### 4. Wait for the first tick (or watch via logs)
+### 5. Wait for the first tick (or watch via logs)
 
 ```sh
 ironclaw logs --follow                # streams the daemon's live output
@@ -91,7 +93,7 @@ ironclaw routines edit --name kanban-tick --schedule '* * * * * *'
 ironclaw routines edit --name kanban-tick --schedule '0 */5 * * * *'
 ```
 
-### 5. Inspect run history
+### 6. Inspect run history
 
 ```sh
 ironclaw routines history kanban-tick -l 5 --json
@@ -103,9 +105,20 @@ Per-run status, duration, and any errors are recorded.
 
 - **Cron cadence configurability.** `0 */5 * * * *` is the example default; tune to taste. Faster cadence picks up new issues sooner; slower reduces compute spend. The kanban convention sets no hard requirement on cadence.
 - **Cooldown vs schedule.** Cooldown is the floor; schedule is the ceiling. They independently throttle.
+- **Action type — stay on lightweight.** Routines default to `action_type=lightweight`. Setting `full_job` via direct DB edit without also setting `title`, `description`, and `max_iterations` breaks the routines table parser globally (Finding 25 in the tracer doc). If you need `full_job` behavior, use `ironclaw routines edit` and supply all required fields in the same call.
 - **Skill activation.** No `--skill` parameter — the routine's prompt activates skills via the same keyword/pattern match as the REPL. Words like `kanban-worker`, `claim`, `ready`, `MultiAgency` in the prompt fire the `kanban-worker` skill.
 - **Multiple repos.** Create one routine per target repo. They run independently.
 - **Identity files** (`AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md` in the IronClaw workspace root) are injected into every LLM call. If yours constrain autonomous tool use ("ask before calling tools", etc.), the routine will hang waiting for approval. Verify they don't conflict with the kanban-worker's claim/work/close autonomy.
+
+## Known limits under the current routine model
+
+The cron path under `openai/gpt-oss-120b` (IronClaw v0.28.0's default routine model) fails on roughly three-quarters of fires. The dominant patterns, all documented in `docs/ironclaw-tracer-outcome.md`:
+
+- **Finding 23 — github WASM missing convention primitives.** `add_assignees`, `add_labels`, `remove_label`, and state-changing `update_issue` are not in the action enum. The prompt at `cron-tick-prompt.md` works around this with the built-in `http` tool, but model adherence to the workaround is imperfect.
+- **Finding 25 — `full_job` deserialization breakage.** Covered under Operational notes above.
+- **Finding 26 — placeholder-leak cruft.** The model occasionally emits `<path-from-issue-body>` and similar bracket-template strings as literal tool arguments. The `.github/workflows/no-cruft.yml` CI check rejects any commit whose changed paths contain `<` or `>`. The same finding also covers the variant where `POST /issues/N/labels` body shape diverges from the GitHub REST schema.
+
+The reactive substrate avoids the `*/5 * * * *` blast pattern and lets you scope each fire to a specific labeled issue (lower model load, higher signal-to-noise). For the cron path to become routine-shape, either (a) swap the routine model to a more capable one, or (b) wait for the upstream PR adding the missing primitives to the github WASM tool (F23 path B), which removes the http-tool dependency entirely.
 
 ## Heartbeat as an alternative
 
@@ -137,6 +150,16 @@ ironclaw routines delete kanban-tick -y
 
 - **`Missing required configuration: DATABASE_URL`** — re-run `ironclaw onboard`. See `docs/ironclaw-tracer-outcome.md` Findings 3 and 14.
 - **Routine fires but no GitHub action.** Check PAT scopes + SAML-SSO authorization. Re-auth if needed: `GITHUB_TOKEN=$(gh auth token) ironclaw tool auth github`. See Finding 12.
+- **`routines list` returns empty after a previously-good config.** Suspect Finding 25 — an `action_type=full_job` edit without required companion fields broke the table parser. Re-set the row back to `lightweight` or supply all required fields in an `edit` call.
 - **Sandbox-probe timeout (~4 min startup hang).** `ironclaw config set sandbox.enabled false`. See Finding 11a.
 - **No eligible issue found.** Confirm your installed skill set matches the open issues' `skill:*` labels: `ironclaw skills list` vs `gh issue list -R <repo> --label "ready,agent-eligible" --json labels`.
+- **Routine completes but the issue is half-claimed (assignee set, label unchanged).** Finding 26 — the http-tool label-add call body diverged from GitHub's schema. Manual cleanup: either complete the label swap by hand and let the agent finish, or revert the assignee and re-queue.
+- **A new commit landed under a path like `<output_path>` or `<extracted-output-path>`.** Finding 26 again — placeholder leak. Delete the file, audit nearby commits for sibling cruft, confirm `.github/workflows/no-cruft.yml` is on `main`.
 - **Handoff doesn't parse.** Run the comment body through `parseHandoff` from the v0 shared library to confirm the fence shape. See `docs/handoff-format.md`.
+
+## Related
+
+- [`cron-tick-prompt.md`](cron-tick-prompt.md) — the procedural prompt this routine runs, with forking notes
+- [`reactive-setup.md`](reactive-setup.md) — the canonical v0.1 webhook-driven substrate
+- [`../ironclaw-tracer-outcome.md`](../ironclaw-tracer-outcome.md) — empirical findings (F23, F25, F26) referenced throughout this doc
+- [`../../skills/kanban-worker/SKILL.md`](../../skills/kanban-worker/SKILL.md) — the convention the routine activates

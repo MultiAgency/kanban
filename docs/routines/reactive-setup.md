@@ -1,121 +1,67 @@
-# Reactive (webhook) routine setup
+# Reactive (webhook) substrate setup
 
-How to deploy an IronClaw agent that fires when a GitHub webhook delivers an event — picks up a newly-`ready`-labeled issue and runs it through the convention, without waiting for the next cron tick.
+How to deploy the IronClaw-driven kanban worker as a reactive substrate — an agent that fires when a GitHub webhook delivers an event, picks up newly-`ready`-labeled issues, and runs them through the convention without waiting for a cron tick.
 
-> Supersedes `reactive.yaml.example`. IronClaw doesn't consume YAML routine definitions; reactive routines are created by the agent (no direct CLI form exists for webhook triggers as of IronClaw v0.28.0).
+This page is the conceptual overview. Step-by-step setup lives in [`worker/README.md`](../../worker/README.md). Read this first, follow the README next.
 
-## Status: v0.1 path
+## Status
 
-**v0.0.1 does not ship a working reactive setup against GitHub-native webhooks.** Two pieces are missing:
+Shipped in v0.1. Reference implementation lives at [`worker/`](../../worker) in this repo — a Cloudflare Worker that adapts GitHub's `X-Hub-Signature-256` HMAC payloads into IronClaw's HTTP webhook channel (which also uses HMAC re-signing, mirroring GitHub's outbound convention). Closes SPEC.md §Deferred to v0.1 #6.
 
-1. **GitHub webhooks sign with `X-Hub-Signature-256`** (HMAC over the payload). **IronClaw webhook routines authenticate with `Authorization: Bearer <secret>`.** No native bridge. An adapter is required (small HTTP shim that verifies the GitHub signature and re-emits the event to IronClaw with a Bearer header).
-2. **The cron path is the canonical v0 substrate.** Reactive is an optimization, not a requirement. The cron tick at `*/5` picks up label changes within ~5 min — sufficient for v0 fleet sizes.
+> The earlier `reactive.yaml.example` template is superseded — IronClaw doesn't consume YAML routine definitions. The reactive substrate uses IronClaw's chat HTTP channel (`POST /webhook` with `{user_id, content, metadata}`) plus skill activation, **not** a webhook-triggered routine. The chat-channel path was chosen over the routine path because the routine path expects `Authorization: Bearer <secret>` and GitHub signs with `X-Hub-Signature-256` — the Worker bridges the two by re-signing the forwarded body with HMAC so IronClaw's HTTP channel can verify it natively.
 
-Per SPEC.md §Deferred to v0.1 #6, reactive lands when the adapter is in place. This doc describes the target setup so the work is well-defined.
-
-## Setup (target state, post-v0.1)
-
-### 1. Create the routine
-
-No direct CLI form exists for webhook routines — they're created via the agent's `routine_create` tool. Talk to the agent inside `ironclaw run`:
+## Architecture
 
 ```
-ironclaw run
-> Create a webhook routine named kanban-on-issue-labeled. Trigger: webhook
-> at path /hooks/kanban-issue-labeled with secret from env var
-> IRONCLAW_KANBAN_WEBHOOK_SECRET. Prompt: when an issues.labeled event
-> arrives, if the issue gained the `ready` label and passes kanban-worker
-> eligibility, claim it via the atomic claim ritual, do the work, post
-> a handoff, close. Otherwise exit cleanly without action. Rate limit
-> 30 runs per hour to prevent label-thrashing loops.
+GitHub  ──signed: GITHUB_WEBHOOK_SECRET───→  Worker  ──re-signed: IRONCLAW_WEBHOOK_SECRET───→  IronClaw daemon
+                                              │                                                 │
+                                              │ (only for actionable                            │ (chat channel
+                                              │  events — see worker/README.md)                 │  routes to
+                                              │                                                 │  kanban-worker
+                                              │                                                 │  skill via
+                                              │                                                 │  keyword match)
 ```
 
-The agent calls `routine_create` with a structure equivalent to:
+Two independent HMAC chains; the Worker verifies the inbound one and re-signs the outbound one so no shared key crosses the network boundary. The daemon-side secret is exposed via the `HTTP_WEBHOOK_SECRET` env var (in `~/.ironclaw/.env`) and must equal the value the Worker has stored under `IRONCLAW_WEBHOOK_SECRET`.
 
-```json
-{
-  "name": "kanban-on-issue-labeled",
-  "trigger": {
-    "type": "webhook",
-    "path": "/hooks/kanban-issue-labeled",
-    "secret": "${IRONCLAW_KANBAN_WEBHOOK_SECRET}"
-  },
-  "prompt": "...",
-  "guardrails": {
-    "max_tokens": 16000,
-    "max_tool_calls": 50,
-    "timeout_secs": 1800,
-    "rate_limit": { "max_runs": 30, "window_secs": 3600 }
-  }
-}
-```
+## Setup
 
-The guardrails section is the full IronClaw reactive-routine schema:
+Setup steps for fork users — Worker deploy, GitHub webhook configuration, daemon env — are documented in [`worker/README.md`](../../worker/README.md). The README covers:
 
-| Field | Purpose |
-| --- | --- |
-| `max_tokens` | Stop the job if cumulative LLM token usage exceeds this value |
-| `max_tool_calls` | Stop after this many tool calls |
-| `allowed_tools` | Whitelist (omit or empty = all tools allowed) |
-| `timeout_secs` | Hard kill after this many seconds |
-| `rate_limit.max_runs` / `.window_secs` | Cap fires per time window |
+1. `wrangler login`, set the two secrets, `wrangler deploy`
+2. Configure the GitHub webhook on the target repo (start with `MultiAgency/test`, not your canonical repo)
+3. Set `HTTP_WEBHOOK_SECRET` in the daemon env so it matches the Worker's `IRONCLAW_WEBHOOK_SECRET`
+4. Ensure the `kanban-worker` skill is installed so its keyword/pattern match activates on the Worker's prompt
+5. Smoke test by labeling an issue `ready` on the test repo and watching `ironclaw logs --follow`
 
-IronClaw auto-registers the endpoint at `POST https://<host>/hooks/<path>`; no separate channel config required.
-
-### 2. Set the shared secret
-
-In the IronClaw deployment environment (the `ironclaw service` launch env on the daemon's host):
-
-```
-export IRONCLAW_KANBAN_WEBHOOK_SECRET='<long-random-string>'
-ironclaw service restart   # if needed; service install picks up env
-```
-
-### 3. Configure the adapter
-
-GitHub webhooks sign payloads with `X-Hub-Signature-256: sha256=<hmac>`. IronClaw expects `Authorization: Bearer <secret>`. Bridge between them:
-
-- Minimum adapter responsibilities:
-  1. Verify GitHub's HMAC signature against the shared secret
-  2. On valid signature, POST the payload to `https://<ironclaw-host>/hooks/kanban-issue-labeled` with `Authorization: Bearer ${IRONCLAW_KANBAN_WEBHOOK_SECRET}`
-  3. Drop invalid signatures silently
-- Deploy targets: a tiny Cloudflare Worker, a serverless function, or an `ironclaw service`-adjacent process
-
-This adapter is v0.1 work; pattern likely lands as a `scripts/webhook-adapter.{mjs,ts}` reference implementation in the kanban repo when the v0.1 reactive issue closes.
-
-### 4. Configure the GitHub webhook
-
-`Settings → Webhooks → Add webhook` on the target repo:
-
-- **Payload URL:** the adapter's public endpoint (NOT IronClaw's directly)
-- **Content type:** `application/json`
-- **Secret:** the same `IRONCLAW_KANBAN_WEBHOOK_SECRET`
-- **Events:** `Issues` (or finer-grained if the adapter pre-filters)
-- **Active:** checked
-
-GitHub delivers a `ping` event on first activation; verify the adapter forwards it without error.
-
-### 5. Verify end-to-end
-
-- Manually label an issue `ready` on the target repo
-- Watch the adapter logs for signature verification
-- Watch `ironclaw logs --follow` for the routine fire
-- Confirm the agent claims (or, if ineligible, exits cleanly without commenting on the issue)
-- Check `ironclaw routines history kanban-on-issue-labeled` for the run record
+Skill behavior, claim ritual, handoff format, and eligibility check are **identical to the cron substrate** — the trigger differs, the convention doesn't.
 
 ## Why rate limiting matters
 
-A misconfigured label-thrashing scenario (e.g., an automation that toggles `ready` and `blocked` rapidly) can fire the webhook many times per minute. Without `rate_limit`, each fire spawns an agent job; cost spikes fast. `30/hour` is a sane starting ceiling — adjust to your fleet's cron equivalent.
+A misconfigured label-thrashing scenario (e.g., an automation that toggles `ready` and `blocked` rapidly) can fire the webhook many times per minute. Each fire spawns an agent job; cost spikes fast. The Worker currently relies on GitHub-side event filtering (`Issues` event only, plus its own actionable-event filter) — fork users running high-traffic repos should consider adding application-level rate limiting at the Worker layer if label churn is plausible.
 
 ## When to use reactive vs cron
 
-- **Cron** is sufficient for v0 fleet sizes. Latency: 0–5 minutes from label change to claim. No infrastructure beyond IronClaw's own daemon.
-- **Reactive** drops claim latency to seconds. Costs: the adapter, GitHub webhook config, an extra moving piece in the operational surface. Worth it for high-velocity projects; overkill for the kanban convention's typical workload.
+- **Cron** (`docs/routines/cron-setup.md`) needs no external infrastructure beyond the IronClaw daemon. Latency: 0–5 minutes from label change to claim. Under the default routine model (`gpt-oss-120b`), reliability is bounded by Findings 26/28/29 in the tracer doc — the work-execution phase is brittle.
+- **Reactive** (this doc) drops claim latency to seconds and sidesteps the cron path's candidate-discovery loop because the webhook payload names the specific issue up-front. Costs: the Worker, GitHub webhook config, two HMAC secrets to manage. Worth it for the canonical roadmap and any project where claim latency matters.
 
-Skill behavior, claim ritual, handoff format, and eligibility check are **identical between cron and reactive** — the substrate doesn't change the convention.
+The current `MultiAgency/kanban` repo runs the reactive substrate; the cron path is benched until model substitution closes the work-execution gap.
+
+## Verifying the substrate is working
+
+GitHub's webhook delivery dashboard (`Settings → Webhooks → click the webhook → Recent Deliveries`) is the authoritative view: each delivery shows the request/response with the Worker. A green check means the Worker accepted the event. From there:
+
+- Watch `ironclaw logs --follow` on the daemon host for the matching prompt arrival
+- Confirm the kanban-worker skill activated (look for the skill's signature output in the agent's response)
+- Confirm the agent reached the claim ritual (assignee + label swap on the issue) — this is the proven floor under the current model per Finding 28
+
+If GitHub shows green but no prompt arrives at the daemon, the HMAC re-signing or the `HTTP_WEBHOOK_SECRET` env var is the place to look. If the prompt arrives but no agent activation follows, the skill isn't installed or the prompt isn't matching its activation keywords.
 
 ## Related
 
-- `docs/routines/cron-setup.md` — the canonical v0 substrate, runnable today
-- `skills/kanban-worker/SKILL.md` — the convention the routine activates
-- SPEC.md §Deferred to v0.1 #6 — disposition for the reactive substrate
+- [`worker/README.md`](../../worker/README.md) — step-by-step setup for fork users
+- [`worker/src/index.ts`](../../worker/src/index.ts) — reference adapter implementation
+- [`cron-setup.md`](cron-setup.md) — the alternative substrate, currently benched pending model substitution
+- [`../ironclaw-tracer-outcome.md`](../ironclaw-tracer-outcome.md) — Findings 27 (HMAC scheme empirical), 28/29 (model limits) referenced above
+- [`../../skills/kanban-worker/SKILL.md`](../../skills/kanban-worker/SKILL.md) — the convention the substrate activates
+- SPEC.md §Deferred to v0.1 #6 — original disposition statement; this doc closes that item

@@ -83,6 +83,7 @@ All JSON fields are optional; agents include only those that apply. The parser i
 - **Action bundler:** `esbuild` (single-file CJS dist targeting `node24`, configured in `package.json` `build` script)
 - **Test framework:** Vitest
 - **Lint + Format:** Biome (single toolchain replacing ESLint + Prettier; covers JavaScript, TypeScript, and JSON. Markdown and YAML are not formatter-tracked.)
+- **Reactive adapter:** Cloudflare Worker at `worker/` (v0.1+; bridges GitHub's `X-Hub-Signature-256` HMAC to IronClaw's chat HTTP channel via re-signing). Has its own `worker/package.json` and `worker/wrangler.toml` — independent of the Action's TypeScript build. Optional for forks: required only when the reactive substrate is enabled; the cron substrate doesn't need it. Deployed via `wrangler deploy` from inside `worker/`. See [`docs/routines/reactive-setup.md`](docs/routines/reactive-setup.md) and [`worker/README.md`](worker/README.md).
 - **Package manager:** npm (Action ecosystem default; avoids adding pnpm-only complexity for contributors forking the repo)
 - **License:** Dual MIT / Apache-2.0 (matching IronClaw and IronHub)
 - **IronClaw runtime version dependence.** Acceptance tests T1 and T4 require a working IronClaw runtime configured with valid LLM provider credentials. Release notes pin the validated runtime version; operational quirks and fork-user setup mitigations are recorded in `docs/ironclaw-tracer-outcome.md`. For v0.28.0 specifically, four one-time mitigations on first setup: (1) keychain wrapper for the NEAR AI session-token gap (Finding 11b); (2) `iclaw config set sandbox.enabled false` to skip the Docker probe and avoid a ~4-minute startup timeout when Docker isn't running (Finding 11a); (3) `GITHUB_TOKEN=<pat> iclaw tool auth github` with a PAT scoped `repo`/`workflow`/`read:org` (and `Configure SSO → Authorize` for SAML-SSO orgs like `MultiAgency`) to seed a per-token scope record via the env-var path — OAuth-app flow is the legacy alternative (Finding 12); (4) re-auth every tool whose credentials predate the current master key, since `ironclaw onboard`'s "fresh keychain master key" option silently invalidates pre-existing encrypted blobs (Finding 12c).
@@ -100,9 +101,12 @@ Format:       npm run format        # biome format --write .
 Format-check: npm run format:check  # biome format .
 Typecheck:    npm run typecheck     # tsc --noEmit
 Push roadmap: npm run push-roadmap  # node scripts/push-roadmap.mjs (see Implementation Notes)
+Worker deploy: cd worker && wrangler deploy  # reactive substrate adapter; see worker/README.md
 ```
 
 `npm run build` must be run before committing changes to `src/action/`, since `dist/index.js` is the file GitHub Actions executes. CI verifies that `dist/` is up to date with source.
+
+The `worker/` subtree has its own `package.json` and Cloudflare Workers toolchain (`wrangler`); deps there don't affect the Action bundle and the worker only matters when the reactive substrate is in use.
 
 ## Project Structure
 
@@ -148,6 +152,12 @@ kanban/
 │   ├── check-spec-refs.sh           # validates SPEC cross-refs in PLAN.md/TASKS.md
 │   ├── validate-roadmap.sh          # validates roadmap/v1-issues.yaml invariants
 │   └── push-roadmap.mjs             # bulk-pushes the roadmap to a target repo
+├── worker/                          # Cloudflare Worker (reactive substrate adapter, v0.1+)
+│   ├── README.md                    # step-by-step setup for fork users
+│   ├── src/
+│   │   └── index.ts                 # GitHub-webhook → IronClaw HMAC bridge
+│   ├── package.json                 # independent of Action's package.json
+│   └── wrangler.toml
 ├── roadmap/
 │   └── v1-issues.yaml               # v1 application roadmap; source of truth
 │                                    # materialized as live GitHub issues via push-roadmap.mjs
@@ -156,6 +166,7 @@ kanban/
     ├── ironclaw-tracer-outcome.md   # T0.4 findings; pins runtime-version dependencies
     └── routines/
         ├── cron-setup.md
+        ├── cron-tick-prompt.md
         └── reactive-setup.md
 ```
 

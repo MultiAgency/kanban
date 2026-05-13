@@ -1,0 +1,56 @@
+name: No cruft files
+
+# Reject commits/PRs that introduce files with placeholder-bracket characters
+# in their paths. Catches the prompt-substitution-leak failure mode documented
+# in `docs/ironclaw-tracer-outcome.md` Finding 26 — when an agent emits an
+# unsubstituted template variable like `<output_path>` as the literal `path`
+# argument to `github.create_or_update_file`, the file lands in the repo with
+# the bracket-pattern intact. This workflow makes that failure visible at push
+# time instead of letting the cruft accumulate silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Reject placeholder-named files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+
+          # First push to a branch (or otherwise no parent): scan the whole tree.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            CHANGED=$(git ls-tree -r --name-only HEAD)
+          else
+            CHANGED=$(git diff --name-only --diff-filter=AMR "$BASE" HEAD)
+          fi
+
+          BAD=$(echo "$CHANGED" | grep -E '[<>]' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Placeholder-named files rejected (Finding 26):"
+            echo "$BAD" | sed 's/^/  /'
+            echo
+            echo "These paths look like prompt-substitution leaks — strings like"
+            echo "'<output_path>' or '<extracted-output-path>' that should have been"
+            echo "replaced with real values before the agent committed."
+            echo
+            echo "Likely cause: agent emitted unsubstituted template variables to"
+            echo "github.create_or_update_file. See docs/ironclaw-tracer-outcome.md"
+            echo "Finding 26 for context."
+            exit 1
+          fi
+          echo "✓ No placeholder-named files in this commit"

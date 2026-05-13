@@ -784,6 +784,62 @@ curl -i -X POST http://127.0.0.1:8080/webhook \
 # 401 with zero UUID → secret mismatch; either fix Worker secret or fix iclaw env.
 ```
 
+### Finding 28: `gpt-oss-120b`'s `create_job` delegation preference is prompt-resistant
+
+**Symptom:** When a kanban-worker agent under `gpt-oss-120b` reaches the "do the work" phase of the convention's ritual (step 4 of `kanban-worker` SKILL.md), the model strongly prefers spawning a sub-job via the `create_job` runtime tool over performing the work inline via `github.create_or_update_file` or `github.create_issue_comment`. The sub-job runs in an isolated sandbox lacking the github WASM tool and the PAT credential injection — it terminates successfully but produces no convention deliverable (no file commit, no comment, no closure). The parent agent then composes an "I completed the work" response based on the assumption that the sub-job handled execution.
+
+**Empirical evidence (post-F26-sweep):** Two independent mitigation attempts on the same failure mode, each tested via a fresh agent run instructed against `MultiAgency/kanban#40` (ADR: SSE over WebSockets rationale). Agent runs ran under `agent_jobs.source=direct`/`sandbox` (invoked via `ironclaw run` or single-message mode), not via routine dispatch from a webhook — `routine_runs` shows zero `trigger_type=webhook` rows in this deployment regardless of whether webhook deliveries arrived at IronClaw (they did, per GitHub's delivery dashboard and the Worker's 200 responses; see Finding 29 caveat on why no dispatch followed).
+
+1. **Verification-gate directive in the routine prompt.** Added text along the lines of: *"Before composing a response that says you claimed, posted, or closed an issue, the immediately-preceding tool calls in this same turn must show [the side-effecting tool returns]. If any of these is missing, the work isn't done — name what's missing in your response instead of narrating completion."* **Result:** the agent's narration became less confidently "I did X" but the `create_job` invocation persisted; the agent gave a confused reasoning-aloud assistant message about how to retrieve sub-job output rather than skipping delegation.
+
+2. **`tool_permissions.create_job = ask_each_time`.** Structural runtime constraint set via `ironclaw config set tool_permissions.create_job ask_each_time` (also `list_jobs`, `job_events`, `cancel_job`). **Result:** agent successfully called `create_job` three times in the next agent run; the permission gate did not prompt or block (see Finding 29).
+
+The claim-ritual phase of the convention (self-assign via http PATCH, label swap via http POST + DELETE) **did execute inline** in both attempts — the prompt-engineering worked for that phase. The delegation preference appears specifically anchored to the "do the work" / file-commit phase, where the model's training favors a delegate-to-worker pattern.
+
+**Implication:** prompt-engineering threshold for this specific behavior is exhausted. v0.1.x convention work depending on agents doing inline file-commit + handoff + close needs either:
+
+- A model with stronger negative-instruction compliance (Claude, GPT-4-class candidates).
+- A runtime that *hard-blocks* `create_job` for non-interactive sessions (current IronClaw `ask_each_time` permission does not — see F29).
+- A different orchestration shape where `create_job` is the *expected* path and the sub-job is configured with github tool access + PAT credential injection (architecture change, not a prompt fix).
+
+**Deferred to v0.1.1 planning:** comparative evaluation of candidate models for kanban-worker work-execution reliability under the same prompt. Specifically test whether Claude (sonnet 4.5 / opus 4.6), GPT-4o, Gemini 2.5 Pro, and Ollama-hosted alternatives respect "do not delegate via create_job" directives under headless invocation.
+
+### Finding 29: `tool_permissions.<tool>` set to `ask_each_time` does NOT block tool calls in headless agent contexts
+
+**Symptom:** Setting `tool_permissions.create_job = ask_each_time` (and the same for `list_jobs`, `job_events`, `cancel_job`) via `ironclaw config set` does not prevent the agent from invoking those tools during a non-interactive agent run. The agent calls the tool, the result returns normally with no permission prompt, and the call's effect is identical to `always_allow`.
+
+**Empirical test:** After setting the four delegation-tool permissions to `ask_each_time` and invoking a kanban-worker agent against `MultiAgency/kanban#40` (via `ironclaw run` / single-message mode — `agent_jobs.source=direct`/`sandbox`, not via webhook routine dispatch), the agent's tool-call trace showed three successful `create_job` invocations each returning a `{job_id, browse_url}` payload. No interactive prompt fired (the headless agent has no TUI attached); no permission-denied error returned.
+
+**Mechanism (inferred from behavior):** the `tool_permissions.<tool>: ask_each_time` config is interpreted as "prompt in interactive TUI for human approval before invocation." In non-interactive channels — `direct`/`sandbox` agent runs from `ironclaw run` or single-message mode, plus (by extrapolation) cron-fired routines and http-channel routines whenever those dispatch — no human is available to prompt, and the runtime evidently treats this as auto-allow rather than auto-deny.
+
+**Implication:** the permission model does not provide a structural block for autonomous flows. Fork users who want to restrict an agent's tool palette in non-interactive contexts cannot rely on `tool_permissions`. The available alternatives:
+
+- **Don't install the tool.** Skills declare their own tool dependencies; not installing the `jobs` capability would prevent any skill from accessing it. Requires modifying the skill manifest, not just permissions.
+- **Prompt-engineer the avoidance.** Per F28, prompt-resistance is a property of the model; this is unreliable.
+- **Use a tool-call validation layer.** Wrap the agent's tool dispatch to reject calls to specific tool names. Requires IronClaw runtime modification or an external proxy.
+
+**Upstream candidate:** add a `tool_permissions.<tool>: deny` or `never_allow` value that hard-blocks the call regardless of channel context (filing as nearai/ironclaw issue is the v0.1.1+ path).
+
+### Finding 30: `gpt-oss-120b` fabricates completion narration after consecutive tool errors — prompt-resistant
+
+**Symptom:** Under the procedurally-explicit Worker prompt (`worker/src/index.ts` translateToPrompt, deployed as version `fbd97c2e`), the kanban-worker agent ran 6 tool calls against #40 — `github(get_issue)` + `http(GET issue)` + `skill_list` + two failed `http(POST /issues/40/labels)` attempts + `http(GET /labels)` — then emitted a single assistant message containing markdown code blocks of the JSON tool-call shapes for steps 5 (commit), 6 (handoff), 7 (close) followed by the literal text **"All steps completed successfully."** None of steps 5/6/7's tools were actually invoked. Issue remained OPEN, no commit, no handoff comment.
+
+**Trigger condition:** the two consecutive label-POST failures (F23/F26-style schema validation errors) appear to push the model from execution mode to narration mode. The model has the correct claim-ritual shapes in the system prompt (AGENTS.md line 18: bare-array `["in-progress"]`) AND in the routine prompt (Worker line 141: `json=["in-progress"]`), but emitted the wrapped form `{"labels":["in-progress"]}` (which `cron-tick-prompt.md` line 30 also documents incorrectly). After two API errors, instead of correcting or stopping, the model fabricated the remaining steps as narrative content.
+
+**Prompt-resistance:** AGENTS.md contains two explicit guards against this exact pattern, both ignored by the model in the same turn:
+- *"Execute, don't just draft. After composing content in your reasoning, you MUST call the side-effecting API tools..."*
+- *"Verification gate before any 'completed' narration. Before composing a response that says you claimed, posted, or closed an issue, the immediately-preceding tool calls in this same turn must show..."*
+
+**Distinguishing from F28:** F28 is delegation-preference (`create_job` instead of inline `http`/`github` calls). F30 is execution-vs-narration substitution — the agent stops calling tools and starts describing tool calls as content. Both share the prompt-resistance signature. The procedural Worker prompt eliminated F28 (zero `create_job` calls in this run versus three in prior vague-prompt runs) but did not prevent F30.
+
+**Mitigation strategies — none verified yet:**
+- **Model substitution.** A stronger model (Claude Sonnet 4.6, GPT-4-class) may honor the existing prompt-level guards. Deferred to v0.1.1 comparative evaluation.
+- **Force `tool_choice=required` for steps 5–7.** Would require routine-layer control over per-turn tool_choice signaling, which IronClaw doesn't currently expose. Upstream PR candidate.
+- **Pre-validate label-POST body in the routine prompt.** Adding one more line clarifying *"emit the body as a bare array `["in-progress"]`, NOT as a wrapped object"* would address the cron-tick-prompt.md regression that triggers F23 → F30 cascade. Cheap; worth trying.
+- **Post-turn server-side verification.** External job that reads the conversation, detects step 5/6/7 narrated-but-not-invoked, and replays the half-state via the convention's own repair mechanism (Rule 2's repair clause). Substantial scope; defer to v0.1.x.
+
+**Cross-reference:** F23 (label-POST schema), F26 (`gpt-oss-120b` placeholder leak), F28 (`create_job` delegation preference). F30 is the third independent prompt-resistant failure mode observed in `gpt-oss-120b` and is the strongest case yet for the v0.1.1 comparative-model evaluation.
+
 ### Finding N: _TBD — populated as future tracer probes surface issues_
 
 ## Recovery playbooks
