@@ -1,0 +1,61 @@
+name: Claim State Lint
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled, assigned]
+
+jobs:
+  lint-claim-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run claim-state lint
+        id: lint
+        run: node src/lint/claim-state.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+
+      - name: Post violation comment
+        if: steps.lint.outputs.violation == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const violationType = process.env.VIOLATION_TYPE;
+            const suggestedFix = process.env.SUGGESTED_FIX;
+            
+            let body = '## ⚠️ Claim State Violation Detected\n\n';
+            
+            if (violationType === 'assigned-plus-ready') {
+              body += '**Issue**: This issue is assigned but still has the `ready` label.\n\n';
+              body += 'This indicates the claim ritual was not completed properly. The claim ritual should:\n';
+              body += '1. Assign the issue to the agent\n';
+              body += '2. Add the `in-progress` label\n';
+              body += '3. Remove the `ready` label\n\n';
+              body += '**Suggested Fix**: Remove the `ready` label to complete the claim.\n';
+            } else if (violationType === 'in-progress-plus-no-assignee') {
+              body += '**Issue**: This issue has the `in-progress` label but no assignee.\n\n';
+              body += 'This indicates the label was set without proper self-assignment. Per convention, `in-progress` requires an assignee.\n\n';
+              body += '**Suggested Fix**: Assign the issue to yourself to claim it properly.\n';
+            }
+            
+            body += `\n*This check runs automatically via .github/workflows/claim-state-lint.yml*\n\n`;
+            body += `Reference: [Convention Rule 2](SPEC.md#claim-ritual) - Explicit claim required before work begins.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
