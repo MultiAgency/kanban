@@ -52,3 +52,8 @@
 - name: skill:review
   color: "d4c5f9"
   description: needs review skill
+
+# --- Validation (transient; F26 redesign cohort) ---
+- name: validation-pass
+  color: "ededed"
+  description: F26 webhook seed cohort

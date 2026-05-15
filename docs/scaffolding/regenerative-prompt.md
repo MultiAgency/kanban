@@ -65,19 +65,46 @@ and `http` (built-in, for label management if needed). Do NOT call
 5. DRAFT 1-3 ISSUES toward the identified gap.
    For each issue:
    - Title: short imperative naming the work
-   - Body: 200-400 words with Acceptance / Verify / Output sections
+   - Body: 200-400 words with Acceptance / Verify / Output sections,
+     composed of concrete prose. Every value is the substituted literal —
+     no markers, no placeholder shapes, no descriptions of values standing
+     in for values.
    - Labels: blocked, human-only, auto-scaffolded, and ONE skill:* label
      matching the dominant work type (skill:writing for prose/docs,
      skill:research for investigation, skill:code for implementation,
      skill:review for audit, skill:translation for localization)
-   - Body must NOT contain literal `[FILL:`, `<X>`, `{{X}}`, or
-     `OUTPUT_PATH` patterns — substitute every placeholder with concrete
-     values BEFORE emitting the tool call (Finding 26)
 
-6. CREATE EACH ISSUE via github WASM:
-   github(action=create_issue, owner=MultiAgency, repo=kanban,
-          title=<concrete title>, body=<concrete body>,
-          labels=["blocked","human-only","auto-scaffolded","skill:<type>"])
+6. CREATE EACH ISSUE via github WASM.
+
+   For each issue you decided to scaffold in step 5, compose its title and
+   body as concrete strings:
+   - Title: the short imperative line you authored in step 5.
+   - Body: the 200-400 word markdown you authored in step 5, with
+     Acceptance / Verify / Output sections, composed of concrete prose.
+
+   Then construct the tool call with these arguments:
+   - action: the literal string "create_issue"
+   - owner: the literal "MultiAgency"
+   - repo: the literal "kanban"
+   - labels: a JSON array of exactly four label strings — the first three
+     are the literals "blocked", "human-only", "auto-scaffolded"; the
+     fourth is one of "skill:writing", "skill:research", "skill:code",
+     "skill:review", "skill:translation", picked to match the dominant
+     work type per step 5. For a research-flavored issue, the labels
+     argument is exactly:
+     ["blocked", "human-only", "auto-scaffolded", "skill:research"]
+   - title: the title string you composed above. Pass it directly as the
+     value of this argument, character-for-character — not a description,
+     not a reference, not a placeholder.
+   - body: the markdown body string you composed above. Pass it directly
+     as the value of this argument, character-for-character — not a
+     description, not a reference, not a placeholder.
+
+   For a research-flavored issue, the scalar arguments of the call look like:
+       action=create_issue, owner=MultiAgency, repo=kanban, labels=["blocked", "human-only", "auto-scaffolded", "skill:research"]
+   Your actual call passes those scalar arguments plus the title and body
+   arguments carrying the strings you composed.
+
    Track which gap each issue addresses.
 
 7. WRITE SUMMARY (one line):

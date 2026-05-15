@@ -689,6 +689,8 @@ Error: Serialization error: Missing field in full_job action: title
 
 **For fork users.** Describe tool-call parameters in prose and ship a concrete worked example. Do not embed a literal tool-call template with placeholder markers and ask the agent to substitute into it — the substitution step is where the leak happens.
 
+**Underlying mechanism (revised 2026-05-15).** Sample inspection of 5 pre-redesign tick runs (Session 2 validation prep) showed the agent emitting literal `issue_number="N"` to `get_issue` even when the preceding `list_issues` call had returned real issues with real numbers in its output. The failure is not narrowly "placeholder content emitted into argument position" — it is "model ignores upstream tool output when the prompt template suggests an answer." The structural redesign (scalar args only, content/body in prose) targets the symptom; the mechanism may persist. First-fire post-redesign observation must verify both (a) no placeholder content in argument position AND (b) the agent uses `list_issues` output to determine `issue_number`, not the prompt's template values. Prior verified: DB-level commit reconciliation for kanban-tick alone in the same window yields 14/26, confirming the 14/27 above is effectively tick-only — webhook contributed at most ~1-3 commits within timestamp-bracket noise of the 27 denominator.
+
 **Out of scope here.** A separate `POST /issues/N/labels` schema-rejection symptom observed on the same fires is plausibly the `http`-tool body-serialization issue tracked in Finding 30, not a placeholder leak.
 
 ### Finding 27: IronClaw HTTP channel uses `X-Hub-Signature-256` HMAC, not a shared-secret header

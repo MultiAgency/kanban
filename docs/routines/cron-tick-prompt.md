@@ -54,25 +54,40 @@ A note on substitution. Every tool-call argument below must be a concrete value,
        Committing path: docs/adr/0042-multi-tenancy.md
    substituting the imaginary path with the one you parsed.
 
-   Then call the github WASM tool. Worked example for the imaginary issue 42 with the path above — your actual call substitutes the integer from step 2 and the path you parsed:
-       github(action=create_or_update_file, owner=MultiAgency, repo=kanban, path=docs/adr/0042-multi-tenancy.md, message="docs: add docs/adr/0042-multi-tenancy.md per #42", content=(the markdown text you drafted in step 5, written verbatim), branch=main)
+   Then construct the tool call with these arguments:
+   - action: the literal string "create_or_update_file"
+   - owner: the literal "MultiAgency"
+   - repo: the literal "kanban"
+   - path: the path string you parsed and just wrote in the "Committing path:" line
+   - message: the literal string "docs: add " concatenated with the parsed path concatenated with " per #" concatenated with the integer from step 2. For the imaginary 42 / docs/adr/0042-multi-tenancy.md example the message is exactly: docs: add docs/adr/0042-multi-tenancy.md per #42
+   - branch: the literal "main"
+   - content: the markdown body you drafted in step 5. Pass it directly as the value of this argument, character-for-character — not a description of it, not a reference to it, not a placeholder.
 
-   For your fire: path is the actual path string you parsed. The message is exactly "docs: add " followed by that same path string, followed by " per #" and the integer from step 2; for the imaginary 42/multi-tenancy example the message is the literal "docs: add docs/adr/0042-multi-tenancy.md per #42". Construct yours analogously by writing the actual path and integer directly into the string.
+   For the imaginary issue 42 with the path above, the scalar arguments of the call look like:
+       action=create_or_update_file, owner=MultiAgency, repo=kanban, path=docs/adr/0042-multi-tenancy.md, message="docs: add docs/adr/0042-multi-tenancy.md per #42", branch=main
+   Your actual call passes those scalar arguments substituted for the integer from step 2 and your parsed path, plus the content argument carrying the markdown body from step 5.
 
 7. POST HANDOFF COMMENT via github WASM.
 
-   The issue_number argument is the integer from step 2. The body argument is a markdown string you compose now. Its structure: the literal text `**Handoff:**` followed by a one-paragraph summary of what was done, a blank line, a fenced block opened with three backticks plus the word `handoff` (no space), a JSON object containing at least one of changed_files (array of path strings), verification (array of step strings), residual_risk (array of risk strings), or links (array of URL strings), then the closing three-backtick fence.
+   Compose the body of the comment as a markdown string. Its structure: the literal text `**Handoff:**` followed by a one-paragraph summary of what was done, a blank line, a fenced block opened with three backticks plus the word `handoff` (no space), a JSON object containing at least one of changed_files (array of path strings), verification (array of step strings), residual_risk (array of risk strings), or links (array of URL strings), then the closing three-backtick fence.
 
-   Worked example for the imaginary issue 42 — your actual body is composed for the actual issue:
-       github(action=create_issue_comment, owner=MultiAgency, repo=kanban, issue_number=42, body=(
+   Then construct the tool call with these arguments:
+   - action: the literal string "create_issue_comment"
+   - owner: the literal "MultiAgency"
+   - repo: the literal "kanban"
+   - issue_number: the integer from step 2
+   - body: the markdown body you composed. Pass it directly as the value of this argument, character-for-character — not a description of it, not a reference to it, not a placeholder.
+
+   For the imaginary issue 42, the scalar arguments of the call look like:
+       action=create_issue_comment, owner=MultiAgency, repo=kanban, issue_number=42
+   Your actual call passes those scalar arguments substituted for the integer from step 2, plus the body argument carrying the markdown you composed.
+
+   For reference, a body composed for the imaginary issue 42 has the shape below — your body has its own one-paragraph summary, its own changed-file paths, its own verification steps, and its own issue URL:
        **Handoff:** Drafted ADR at docs/adr/0042-multi-tenancy.md. Comparison covers per-tenant-DB, row-level-tenancy, and schema-level isolation. Status: Proposed.
 
        ```handoff
        {"changed_files": ["docs/adr/0042-multi-tenancy.md"], "verification": ["markdown render check", "ADR section order verified"], "links": ["https://github.com/MultiAgency/kanban/issues/42"]}
        ```
-       ))
-
-   For your fire: write the body argument as concrete markdown text, with the actual one-paragraph summary, the actual changed file paths, the actual verification steps, and the actual issue URL. Do not include any parenthesized prose like `(the markdown text drafted in step 5)` in the body — that prose belongs only in this prompt as a description; your body must be the literal markdown you authored.
 
 8. CLOSE ISSUE via http. The URL's issue-number path segment is the integer from step 2.
    Worked example for the imaginary issue 42:
@@ -94,7 +109,7 @@ If you adopt this prompt for a different kanban-conventional repo:
 
 The procedural form produces successful end-to-end fires; the residual failure modes (each described in `docs/ironclaw-tracer-outcome.md`) are:
 
-- **Finding 26 — placeholder leak.** Earlier prompt revisions embedded a literal template string like `path=[FILL: output_path_from_issue_body]` inside the step-6 tool-call shape and asked the agent to substitute concrete values into it. The agent often echoed the marker instead of substituting — sometimes as `<output_path>`, sometimes as `OUTPUT_PATH_FROM_ISSUE_BODY`, sometimes as paraphrased prose like `<output_path from step 6, if any>`. The current prompt eliminates the literal template-with-markers shape: each parameter is described by what its value should be, and every tool call ships with a fully concrete worked example (the imaginary issue 42 + docs/adr/0042-multi-tenancy.md). The `.github/workflows/no-cruft.yml` gate remains as a backstop for commits whose paths contain bracket characters.
+- **Finding 26 — placeholder leak.** Earlier prompt revisions embedded literal template strings like `path=[FILL: output_path_from_issue_body]` and parenthesized prose stand-ins like `content=(the markdown drafted in step 5)` in the tool-call shape, asking the agent to substitute concrete values into them. The agent often echoed the marker or prose stand-in verbatim instead of substituting. Marker-form variation (square brackets vs angle brackets vs uppercase identifiers) did not change leak rate, indicating the failure was insensitive to which form was used and sensitive only to placeholder-shaped prose existing in argument position. The current mitigation is structural: tool-call shapes show only scalar arguments (`action`, `owner`, `repo`, `path`, `message`, `issue_number`, `branch`); the content and body arguments are described in surrounding prose with no stand-ins inside the call shape.
 - **Mid-cycle stalls.** A fire may complete the claim ritual + commit the work file but then skip the handoff comment or close step, leaving an `in-progress` half-state on the issue. Step 2's condition (e) excludes `in-progress` from new claims, so the next cron tick will skip the half-state issue rather than repair it. Manual repair (toggle `ready` off-then-on to re-fire the webhook substrate, or just close + handoff by hand) is currently required. A dedicated repair routine is a v0.1.x work item.
 - **Finding 25 — `action_type=full_job` deserialization breakage.** Setting the routine to `full_job` via direct DB edit without `title`, `description`, and `max_iterations` set crashes the routines table parser globally. Use `ironclaw routines edit` with all required fields, or stay on lightweight mode.
 
