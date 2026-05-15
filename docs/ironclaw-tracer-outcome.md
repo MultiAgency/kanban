@@ -226,7 +226,7 @@ Distinguished from Phase 6 by **substrate and substance**: Phase 6 ran on `Multi
 **What's verified that wasn't before:**
 
 - Real GitHub events drive the convention pipeline (vs cron's "agent finds an issue" loop).
-- The structural failure modes from Phase 8 (placeholder substitution leak, multi-step discovery state loss) **don't manifest under webhook delivery** — the trigger payload identifies the work up front, so no state to lose across rounds.
+- The structural failure modes from Phase 8 (placeholder substitution leak, misfired tool selection on the issue-discovery step) **don't manifest under webhook delivery** — the trigger payload identifies the work up front, so the agent skips the discovery step entirely: no `tool_search` to misfire, and the issue identifier is substituted server-side rather than by the agent.
 - The `http`-tool workaround for F23 (github WASM missing convention primitives) integrates cleanly with webhook-driven invocations.
 - The `worker/` adapter is the recommended path for fork users adopting the reactive substrate.
 
@@ -543,26 +543,17 @@ The "blocked on Finding 11" framing that drove deferral language elsewhere in th
 - **Mitigation upstream:** populate the function's `parameters` JSON Schema from either (a) the WASM tool's exported `schema()` function, or (b) the `discovery_summary` in `capabilities.json` (at minimum surface `always_required` and the action name enum). Without this, every WASM tool with multiple actions is unusable to the LLM without an out-of-band prompt nudge.
 - **Workaround for the kanban demo:** bypass the WASM tool entirely. The built-in `http` tool has a typed schema, accepts arbitrary headers (so credentials can be injected explicitly via `Authorization: Bearer <PAT>`), and worked end-to-end for the watched demo — at the cost of putting the PAT in the conversation context, which is fine for a one-shot demo but not for production routines.
 
-### Finding 20: `openai/gpt-oss-120b` (via NEAR AI) drops tool-call format mid-call on large POST body
+### Finding 20: malformed `http` tool call leaves a large-body comment unposted
 
-> **Attribution correction.** This finding was originally attributed to "Qwen 3.5 122B" based on a stale assumption about which model was active. The actual model in use at the time of the observed failures was `openai/gpt-oss-120b` served via NEAR AI Cloud (verified after the fact via `ironclaw config get selected_model`). The mechanism description below is unchanged; only the model name and any upstream-filing implications shift.
+**Symptom:** During the work-execution step of a claim, the agent emits an `http` call to post a large comment — but the call is malformed, IronClaw rejects it, and the agent then writes the comment content as plain assistant text instead of retrying the call correctly. The issue is left `in-progress` with no handoff comment — a half-state per Rule 2.
 
-**Symptom:** Agent successfully completes preceding small-body tool calls (read context, atomic claim ritual — each PATCH/POST/DELETE with kilobyte-scale arguments), then emits the rationale for the next tool call (e.g., "Now I'll generate the comprehensive skeleton spec and post it as a comment") and produces the large body content as **plain assistant text** rather than as the tool call's `body` argument. The structured-output mode lapses mid-call.
+**Observed:** One run — conversation `941cb354`, issue #45 (Hono application skeleton spec). Eight `http` calls: turn0_0–turn0_6 succeeded (context reads + claim ritual); turn0_7 — the POST-comment call — failed with `Invalid parameters: missing 'url' parameter`. The agent then emitted a 15,840-character assistant message holding the spec content as plain text. The comment was never posted.
 
-**Observed:** Issue #45 (Hono application skeleton spec). Agent executed 7 tool calls cleanly (4 context-reading GETs + 3-step claim ritual PATCH/POST/DELETE), then turn0_7 emitted the POST-comment rationale and a 15,840-character assistant message containing the substantive spec — but the tool call's `result` was empty (no API call actually fired). From the kanban's perspective, the issue stayed in `in-progress` with no handoff comment posted — a half-state per Rule 2. Reproduced across two separate attempts on the same issue.
+**Cause: not established.** The verified fact is a single malformed call: the 8th `http` call omitted the required `url` parameter — and it was the one call in the run carrying a large `body`. The agent had formed seven well-shaped `http` calls immediately prior, so it *can* construct the call correctly. Whether the large `body` argument crowded out the `url` (a model attention effect), or the prompt didn't template the POST-comment call clearly, is not distinguishable from a single instance.
 
-**Likely mechanism:** Mode switch from "many small structured tool calls" to "single large content tool call" exceeds the model's reliability threshold for maintaining structured-output format. The model's output drifts back to natural-language generation mid-call. The threshold is empirically somewhere between the claim-ritual call sizes (~hundreds of bytes) and the spec POST body (~15K bytes); the exact boundary is not measured.
+**Distinct from Finding 30:** F30 is a parameter-*name* mismatch (`json=` vs `body=`) — the call is well-formed, the body just lands under an unrecognized key. F20 is a *missing required parameter* (`url`) — the call is rejected outright. Both end the same way (content never reaches the API, agent narrates instead), but the malformation differs.
 
-**Tonight's mitigation:** Salvage the agent's content from the IronClaw `conversation_messages` table and relay via `gh issue comment` with an attribution prefix (a "relay note" naming the failure mode and clarifying that the substantive work is the agent's, the relay is mechanical). Issue #45's [spec comment](https://github.com/MultiAgency/kanban/issues/45#issuecomment-4426186125) was relayed this way; the convention's "agent produces real artifacts" property stands; the property that drops is "agent operated the GitHub API end-to-end for this issue."
-
-**Structural mitigations for v0.1 substrate work:**
-
-- **Model selection.** Try Claude or GPT-4 (both have stronger tool-call format adherence at large bodies in prior observation). Add to v0.1 model-evaluation backlog. Track the body-size threshold per model.
-- **Body-size guard in `kanban-worker` skill.** Detect "about to POST ≥ ~8K chars" and split the work into multiple smaller comments (e.g., post sections incrementally, then a summary comment linking them). The convention permits multi-comment delivery as long as the handoff fence is the parser anchor.
-- **Prompt structure.** Explicitly instruct: "Place the spec content inside the `body` argument of an http POST tool call. Do not emit the spec as response text — that produces a half-state. If the body would exceed 8000 characters, split into multiple POSTs." May or may not work depending on model instruction-following under load; the SKILL.md "Execute, don't just draft" update is a step in this direction but doesn't address the size threshold specifically.
-- **Upstream filing.** Worth a one-liner to NEAR AI Cloud about the failure mode, ideally with reference to the upstream `openai/gpt-oss` repository so the model maintainers see it. Not urgent — workaround is known.
-
-**Salvage playbook** (when this recurs):
+**Salvage playbook** (recovers the agent's content from a half-state):
 
 ```bash
 # 1. Find the conversation ID for the failed run
@@ -584,49 +575,27 @@ sed -i '' '1,/^$/d' /tmp/agent-content.md   # macOS sed; drops up to first blank
 
 This Finding's [residual_risk](https://github.com/MultiAgency/kanban/issues/45#issuecomment-4426187833) is recorded as part of issue #45's handoff.
 
-### Finding 21: Cron-fired routine runs are less reliable than interactive runs under the same prompt
+### Finding 21: a cron routine fire misfired tool selection — enumerative `tool_search` instead of the direct query
 
-**Symptom:** A cron-scheduled IronClaw routine running the kanban-worker convention produces inconsistent behavior across fires. Same prompt, same model, same skill set, same target repo — but ~33% of fires drift into pathological tool selection (in the observed case, calling `tool_search` with an absurdly enumerative ~200-label skill query) instead of the obvious `http GET /issues?labels=ready+agent-eligible` path the prompt invites.
+**Symptom:** A `kanban-tick` cron fire opened with a `tool_search` call whose `query` enumerated ~200 skill labels (most nonexistent — the project's canonical set has five `skill:*` labels), instead of the direct `http GET /issues?labels=ready,agent-eligible` path the prompt invites. The misfire burned ~12K extra tokens without progressing the task.
 
-**Observed setup:**
-
-- Routine: `kanban-tick` (cron `0 */5 * * * *`, action_type `lightweight`, `max_tokens: 8192`, `max_tool_rounds: 30`).
-- Prompt: *"Follow the kanban-worker convention on MultiAgency/kanban. Find one ready+agent-eligible issue you are qualified for by skill match. Walk Rule 6 four-condition eligibility. If green, perform Rule 2 atomic claim, do the work substantively, post a handoff comment, then close the issue. If no eligible issue is available, exit cleanly."*
-- Three sequential fires under interactive load (user was simultaneously working on #1, #13, #45 in the TUI channel): 00:00 ok 27K tokens, 00:05 **attention** 39K tokens, 00:12 ok 27K tokens.
-
-**The "attention" run:** Agent's first tool call was `tool_search` with `query: "MultiAgency/kanban issues ready agent-eligible skill:code skill:review skill:writing skill:research skill:translation skill:debugging skill:test ..."` enumerating roughly 200 skill labels (most of which don't exist in the project's canonical label set — see `.github/labels.yml`, which defines five `skill:*` labels). The model appears to have interpreted "find an issue by skill match" as "search for the right tool by enumerating every conceivable skill name." Tool-search is the wrong tool for this task — `http GET /issues?labels=ready,agent-eligible` is the direct path. The misuse burned ~12K extra tokens vs the "ok" runs without progressing the task.
-
-**Likely mechanisms:**
-
-- **Cron-fired prompts run in a less-grounded context than interactive prompts.** Interactive runs come with the user's conversational scaffolding (prior turns, error correction, follow-ups). Cron-fired runs are cold-start — the model sees only the static prompt and has to bootstrap intent inference from a single message. Edge cases and pathological tool selection are more likely.
-- **Same underlying tool-call drift as Finding 20.** `openai/gpt-oss-120b` (via NEAR AI) has observable reliability issues in structured output. Different load shapes (large body content vs cold-start prompt) surface different failure modes of the same underlying instability.
-- **Routine action_type `lightweight` may reduce context further.** The `lightweight` action config trims skill/context loading relative to full agent runs — the agent may not have the kanban-worker SKILL.md fully in context when firing.
-
-**Tonight's mitigation:** Disable the routine while doing interactive work. Cron fires compete for token budget and produce noise that obscures interactive-run signals. Re-enable when interactive sessions are quiet and the convention's autonomous-loop property is what's being tested.
-
-Disable in DB:
-
-```bash
-sqlite3 ~/.ironclaw/ironclaw.db "UPDATE routines SET enabled=0 WHERE name='kanban-tick'"
-```
-
-Re-enable: same query, `enabled=1`. Or via the IronClaw CLI if a `routine enable/disable` subcommand exists (not verified in v0.28.0).
-
-**Structural mitigations for v0.1 substrate work:**
-
-- **Add a routine prompt template to `docs/routines/`.** The current prompt is human-friendly prose; a more agent-friendly version would name the exact first tool call: *"Your first action is `http GET https://api.github.com/repos/MultiAgency/kanban/issues?labels=ready,agent-eligible&state=open&per_page=30`. Inspect the returned issues for skill match. If none match your installed skills, exit. Otherwise, proceed to the claim ritual."* Removes the "what tool do I use" decision the model is getting wrong.
-- **Re-evaluate `lightweight` action_type.** If routine fires need the kanban-worker SKILL.md in context, `lightweight` may be the wrong action mode. `worker` mode (the default for non-lightweight) loads more skill context and may produce more reliable runs at higher token cost.
-- **Track routine success rates per model.** v0.1 model evaluation should include cron-fired routine behavior, not just interactive prompt behavior. Different models likely have different reliability profiles for cold-start agent runs.
-- **Document the routine-disable-during-interactive-work pattern in `docs/maintenance.md`.** Cron-fired routines firing in parallel with interactive sessions is the v0 default configuration but the failure-mode interaction (routine noise overlapping interactive signals) is not currently flagged.
-
-**Observed run record:**
+**Observed:** Three sequential `kanban-tick` fires (cron `0 */5 * * * *`, `action_type=lightweight`), with interactive work happening in parallel on the same daemon:
 
 ```
-routine: kanban-tick (id 341c0074-5ba1-4743-a8a6-956a6684bb5e)
 2026-05-12T00:00:04Z  ok         27,048 tokens (exited cleanly — no eligible issue)
-2026-05-12T00:05:34Z  attention  38,990 tokens (tool_search misfire on enumerative query)
+2026-05-12T00:05:34Z  attention  38,990 tokens (tool_search misfire)
 2026-05-12T00:12:34Z  ok         27,410 tokens (exited cleanly — no eligible issue)
 ```
+
+One misfire in three fires — too small a sample to characterize a rate, and the parallel interactive load is an uncontrolled variable.
+
+**Cause: not established.** The misfire is real; whether it correlates with cron firing, cold-start prompts, `lightweight` action mode, concurrent load, or the prompt's "find an issue by skill match" phrasing is not distinguished.
+
+**Mitigation — name the first tool call in the routine prompt.** The prompt said "find one ready+agent-eligible issue you are qualified for by skill match"; the model read "by skill match" as "enumerate every skill name into a `tool_search`." A prompt that names the exact first action removes the decision the model got wrong:
+
+> *"Your first action is `http GET https://api.github.com/repos/<owner>/<repo>/issues?labels=ready,agent-eligible&state=open&per_page=30`. Inspect the returned issues for skill match against your installed skills. If none match, exit cleanly. Otherwise proceed to the claim ritual."*
+
+`docs/routines/cron-tick-prompt.md` already moved toward this procedural shape.
 
 ### Finding 22: T7.1 banked at three escalating tiers of evidence
 
@@ -704,54 +673,23 @@ Error: Serialization error: Missing field in full_job action: title
 
 **Upstream fix candidate:** the `ironclaw routines edit` CLI should expose `action_type` as a flag, and the migration logic should validate the new action_config shape before committing the DB write. Currently the only way to flip action_type is direct DB UPDATE, which has no schema validation. Fork users who try to migrate routines via DB will hit this trap.
 
-### Finding 26: GPT-OSS-120B emits template-variable placeholders as literal tool args; `POST /issues/N/labels` via http tool fails schema validation
+### Finding 26: literal `[FILL: ...]` templates in the routine prompt leak into commits as placeholder paths
 
-**Two related symptoms observed on the same `full_job` cron tick** (`164bf22d-d41b-4276-a857-4217a1d37ed7`, 2026-05-12T02:22-02:24, 34 job_events, status=completed-but-nothing-claimed). Reproduces across multiple sequential fires after the routine prompt was migrated to `full_job` + explicit tool mapping.
+**What happens.** The `kanban-tick` cron prompt embedded a literal tool-call template for the `create_or_update_file` step — `path=[FILL: output_path]`, `message="docs: add [FILL: output_path] per #[FILL: issue_number_N]"` — and asked the agent to substitute concrete values before emitting the call. On roughly half of all file-commit fires the agent emitted a transformation of the marker itself instead of the real value, committing a file whose path is a literal placeholder string.
 
-**Symptom 1 — placeholder-as-literal:** The agent's reasoning produces tool calls whose argument values are the *template variable names from the planning step*, emitted as literal strings:
+**Evidence.** In the 2026-05-11 through 2026-05-13 window, 14 of 27 file-commit cron fires committed a placeholder path. The leaked surface forms are all recognizable transformations of the prompt's variable names — `<path>`, `<output_path>`, `<output_path_extracted_from_issue_body>`, `<OUTPUT_PATH>`, `OUTPUT_PATH_FROM_ISSUE_BODY`, `{{output_path}}`, bare `output_path` — never random strings. The issue number leaks the same way (`per #<N>`, `per #{{issue_number}}`, `per #<selected-issue-number>`). Representative commits: `0ad411b`, `8872f3e`, `8be5282`, `54929f3`, `e1b3b38`, `f7a554c`, `af29f32`.
 
-```json
-{"action": "get_issue", "issue_number": "<selected_issue_number>", ...}
-```
+**The cause is the prompt, not the model.** Two facts locate it in the prompt's design:
 
-```json
-{"method": "PATCH", "url": "https://api.github.com/repos/MultiAgency/kanban/issues/<selected_issue_number>", ...}
-```
+1. **Only agent-substituted placeholders leak.** The cron prompt hardcodes `owner=MultiAgency` and `repo=kanban` as static text and leaves `path`, `message`, `content`, and `issue_number` as `[FILL: ...]` markers for the agent to fill at fire-time. Across every leak commit, owner and repo are correct; only the `[FILL:]` values leak. The failure is specifically at agent-side substitution against markers the model sees as literal text in the prompt.
 
-GitHub returns `Not Found` (404). The agent emits 4-6 such failed calls per tick before recovering to actual issue numbers (events 240-254 in the 02:22 trace, then events 259 onward use `42` and `41`). The recovery costs context window and tool-call iterations, displacing the substantive work.
+2. **A more distinctive marker did not help.** Commit `1e7fd93` (2026-05-13 01:52) introduced the `[FILL: ...]` convention specifically to make placeholders unmistakable. 11 of the 14 leak commits postdate it. The distinctive marker only rotated the leaked surface form; it did not lower the rate, because the failure is in the substitution operation, not in recognizing any particular marker syntax.
 
-**Symptom 2 — `POST /issues/N/labels` schema rejection:** Even after the agent recovers to real issue numbers and uses the `http` tool per `AGENTS.md` guidance, GitHub returns:
+**Mitigation.** Both substrate prompts (`docs/routines/cron-tick-prompt.md` and `worker/src/index.ts`'s `translateToPrompt`) were rewritten to remove literal tool-call templates entirely. Each argument is now described in prose by what its value should be, and every step ships a fully concrete worked example using imaginary issue 42 and path `docs/adr/0042-multi-tenancy.md`, with an explicit instruction that those literals belong to the example only. As a backstop, `.github/workflows/no-cruft.yml` rejects any commit whose changed paths contain `<` or `>`. Confirming the prompt cause requires re-measuring the leak rate over the next 20+ fires with the rewritten prompts deployed; a near-zero rate confirms it.
 
-```
-"message": "Invalid request.\n\nNo subschema in \"anyOf\" matched."
-```
+**For fork users.** Describe tool-call parameters in prose and ship a concrete worked example. Do not embed a literal tool-call template with placeholder markers and ask the agent to substitute into it — the substitution step is where the leak happens.
 
-…on `POST /repos/{owner}/{repo}/issues/{N}/labels`. Agent retries with two body shapes:
-
-```json
-{"labels": ["in-progress"]}        // wrapped object — rejected
-["in-progress"]                     // bare array — also rejected
-```
-
-Both fail. The label add step never completes, so the claim ritual stays half-done (assignee set, label not swapped) — the F23 workaround path is itself broken for the label-add step.
-
-**Likely mechanism (Symptom 1):** GPT-OSS-120B's structured-output decoding doesn't distinguish *reference to a variable defined in the same response* from *literal string value*. The agent's planning step says "first I'll select an issue, then I'll use its number as `<selected_issue_number>` in subsequent calls" — and the model emits the placeholder as the literal value rather than performing the substitution. Same family of failure as F20 (mid-call format drift), different surface area.
-
-**Likely mechanism (Symptom 2):** Either (a) the http tool's `json` field serialization is wrapping bare arrays incorrectly, (b) the request lacks required Content-Type or other headers for label endpoints specifically, or (c) the agent's PAT lacks fine-grained `Issues: Write` permission for label operations specifically. GitHub's `POST /issues/N/labels` accepts either `{"labels": [...]}` or `[...]` per `docs.github.com/rest/issues/labels` — neither shape works here.
-
-**Net effect:** Every routine fire since the migration to `full_job` + http-tool ritual mapping shows the same pattern: 26-48 job_events, `completed` status, zero issues closed, zero `llm_calls` rows (the recording gap from F24's mode shift compounds the diagnostic difficulty). Two issues did close earlier under different conditions (#44 closed via `lightweight` mode pre-migration; #46 closed via `full_job` but with manual cleanup of the claim ritual per F23). Post-migration, the routine produces no end-to-end closures.
-
-**Mitigations:**
-
-1. **Prompt hardening (immediate).** AGENTS.md's "Critical: fill in template variables before emitting" guidance addresses Symptom 1 by name. Verify in subsequent fires whether the model honors it.
-2. **API-call shape probe (next).** Manually test `POST /repos/MultiAgency/kanban/issues/<N>/labels` via curl with the agent's exact body shape and the same PAT to isolate whether Symptom 2 is the http tool's serialization, GitHub's API, or a credential scope. The diagnostic command is in scope for a 5-minute interactive verification.
-3. **Structural (v0.1).** Switch routine model to one with better structured-output adherence (Claude or GPT-4) for label-write workloads, or wait for the upstream PR adding label/assignee actions to the github WASM tool (F23 path B) which removes the http-tool dependency entirely.
-
-**Recurrence on canonical roadmap (post-v0.1.0 substrate ship):** Three `kanban-tick` cron runs against `MultiAgency/kanban` under `gpt-oss-120b` produced literal-placeholder commits: cron run at 2026-05-12T01:55:20Z → commit `0ad411b` (file `<path-from-issue-body>`, message `docs: add <path> per #N`); cron run at 05:10:05Z → commit `8872f3e` (file `<output_path_extracted_from_issue_body>`, message `docs: add <output_path> per #<N>`); cron run at 05:15:50Z → commit `8be5282` (file `<extracted-output-path>`, message `docs: add <extracted-output-path> per #<N>`). All three runs recorded `status=ok` in `routine_runs` — IronClaw's success signal is "agent completed without throwing," not "agent produced valid output," so F26 passes the runtime's gate cleanly. Trash files cleaned up later (`<path-from-issue-body>` deleted in `e3520df`; the other two deleted in `0562ab0`). Issue #41 currently sits in a half-state (claimed by `jlwaugh`, `in-progress` label, no deliverable) — that state was reached via manual claim during diagnosis, not via these cron runs.
-
-Note on substrate attribution: an earlier draft of this paragraph attributed the placeholder commits to "a webhook-triggered run on `MultiAgency/kanban#41`." The IronClaw DB (`routine_runs`) records zero `trigger_type=webhook` fires in this deployment — every routine fire that has ever happened on this database is `trigger_type=cron` (22 runs, all `kanban-tick`). The webhook routine `kanban-test` has `run_count=0`. The misattribution was a real instance of evidence-source conflation during fast-moving multi-substrate diagnostics; corrected here against DB ground truth.
-
-Contributing factor identified during post-mortem: convention documentation surfaces (AGENTS.md, kanban-worker SKILL.md, Worker prompt) use `<...>` and `{...}` placeholder syntax extensively for pedagogical purposes; under `gpt-oss-120b`, this trains the model to reproduce the syntax in its own tool-call args rather than recognize it as documentation-only notation. Underlying model property: `gpt-oss-120b` cannot reliably distinguish placeholder concepts from literal string values when both follow conventional syntax patterns. Mitigation in v0.1.x via distinctive `[FILL: name]` marker syntax across agent-facing prompts; fork users designing their own agent-facing prompts should use similarly distinctive markers.
+**Out of scope here.** A separate `POST /issues/N/labels` schema-rejection symptom observed on the same fires is plausibly the `http`-tool body-serialization issue tracked in Finding 30, not a placeholder leak.
 
 ### Finding 27: IronClaw HTTP channel uses `X-Hub-Signature-256` HMAC, not a shared-secret header
 
@@ -774,7 +712,7 @@ HTTP/1.1 401
 
 ```sh
 SECRET="<your-HTTP_WEBHOOK_SECRET-value>"
-BODY='{"user_id":"default","message":"channel smoke test"}'
+BODY='{"user_id":"default","content":"channel smoke test"}'
 SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
 curl -i -X POST http://127.0.0.1:8080/webhook \
   -H "Content-Type: application/json" \
@@ -784,41 +722,35 @@ curl -i -X POST http://127.0.0.1:8080/webhook \
 # 401 with zero UUID → secret mismatch; either fix Worker secret or fix iclaw env.
 ```
 
-### Finding 28: `gpt-oss-120b`'s `create_job` delegation preference is prompt-resistant
+### Finding 28: `create_job` is invoked during work-execution; its effect on closure rate is unestablished
 
-**Symptom:** When a kanban-worker agent under `gpt-oss-120b` reaches the "do the work" phase of the convention's ritual (step 4 of `kanban-worker` SKILL.md), the model strongly prefers spawning a sub-job via the `create_job` runtime tool over performing the work inline via `github.create_or_update_file` or `github.create_issue_comment`. The sub-job runs in an isolated sandbox lacking the github WASM tool and the PAT credential injection — it terminates successfully but produces no convention deliverable (no file commit, no comment, no closure). The parent agent then composes an "I completed the work" response based on the assumption that the sub-job handled execution.
+`create_job` was invoked 7 times, all on 2026-05-12, recorded in `conversation_messages` (role=`tool_calls`):
 
-**Empirical evidence (post-F26-sweep):** Two independent mitigation attempts on the same failure mode, each tested via a fresh agent run instructed against `MultiAgency/kanban#40` (ADR: SSE over WebSockets rationale). Agent runs ran under `agent_jobs.source=direct`/`sandbox` (invoked via `ironclaw run` or single-message mode), not via routine dispatch from a webhook — `routine_runs` shows zero `trigger_type=webhook` rows in this deployment regardless of whether webhook deliveries arrived at IronClaw (they did, per GitHub's delivery dashboard and the Worker's 200 responses; see Finding 29 caveat on why no dispatch followed).
+- One call at 01:34Z under `Qwen/Qwen3.5-122B-A10B` — a "Create hello.txt in sandbox" capability probe, in the same turn as `job_status` and `job_events` calls. The agent was exploring the jobs system.
+- Six calls between 02:59Z and 16:21Z under `openai/gpt-oss-120b`, in http-channel conversation `abeeeef4`, during ADR-40 / ADR-41 work — spread across 13+ hours and many runs.
 
-1. **Verification-gate directive in the routine prompt.** Added text along the lines of: *"Before composing a response that says you claimed, posted, or closed an issue, the immediately-preceding tool calls in this same turn must show [the side-effecting tool returns]. If any of these is missing, the work isn't done — name what's missing in your response instead of narrating completion."* **Result:** the agent's narration became less confidently "I did X" but the `create_job` invocation persisted; the agent gave a confused reasoning-aloud assistant message about how to retrieve sub-job output rather than skipping delegation.
+The work those six calls supported did complete: the ADRs for #40 (`docs/research/adr-0002-sse-over-websockets.md`) and #41 committed, and the `sandbox`-source sub-jobs `create_job` spawned ("Base64 encode ADR markdown for issue #41", etc.) ran to completion with their content reaching the repo.
 
-2. **`tool_permissions.create_job = ask_each_time`.** Structural runtime constraint set via `ironclaw config set tool_permissions.create_job ask_each_time` (also `list_jobs`, `job_events`, `cancel_job`). **Result:** agent successfully called `create_job` three times in the next agent run; the permission gate did not prompt or block (see Finding 29).
+`create_job` is not recorded in `job_events` at all (0 rows among 889 `tool_use` events). `conversation_messages` is the authoritative log for conversation-channel tool calls and the place to look for `create_job` activity.
 
-The claim-ritual phase of the convention (self-assign via http PATCH, label swap via http POST + DELETE) **did execute inline** in both attempts — the prompt-engineering worked for that phase. The delegation preference appears specifically anchored to the "do the work" / file-commit phase, where the model's training favors a delegate-to-worker pattern.
+**Open:** whether routine `create_job` use during work-execution is a behavioral preference worth flagging or a reasonable orchestration choice is unestablished — the work got done either way. A controlled re-test would settle it: fix the prompt confounds in Findings 26 and 30 first, run N issues, and measure whether `create_job` invocation correlates with failed vs. successful closures. On current evidence this does not bear on model selection.
 
-**Implication:** prompt-engineering threshold for this specific behavior is exhausted. v0.1.x convention work depending on agents doing inline file-commit + handoff + close needs either:
+### Finding 29: whether `tool_permissions = ask_each_time` blocks tool calls in headless contexts is untested
 
-- A model with stronger negative-instruction compliance (Claude, GPT-4-class candidates).
-- A runtime that *hard-blocks* `create_job` for non-interactive sessions (current IronClaw `ask_each_time` permission does not — see F29).
-- A different orchestration shape where `create_job` is the *expected* path and the sub-job is configured with github tool access + PAT credential injection (architecture change, not a prompt fix).
+This is a hypothesis, not a verified finding. It is recorded here because it bears on whether `tool_permissions` can gate tool access in autonomous flows.
 
-**Deferred to v0.1.1 planning:** comparative evaluation of candidate models for kanban-worker work-execution reliability under the same prompt. Specifically test whether Claude (sonnet 4.5 / opus 4.6), GPT-4o, Gemini 2.5 Pro, and Ollama-hosted alternatives respect "do not delegate via create_job" directives under headless invocation.
+**Hypothesis:** `tool_permissions.<tool> = ask_each_time` is interpreted as "prompt in an interactive TUI for human approval." In non-interactive contexts (`direct`/`sandbox` agent runs, cron routines, http-channel dispatch) no human is attached, and the runtime may treat the call as auto-allow rather than auto-deny. If true, `tool_permissions` is not a structural block for autonomous flows.
 
-### Finding 29: `tool_permissions.<tool>` set to `ask_each_time` does NOT block tool calls in headless agent contexts
+**Why it is untested:** there is no config-change audit log, so we cannot confirm `tool_permissions.create_job = ask_each_time` was set at the time the `create_job` calls in Finding 28 executed. Current config shows `ask_each_time`, but when it was set relative to those calls is unknown.
 
-**Symptom:** Setting `tool_permissions.create_job = ask_each_time` (and the same for `list_jobs`, `job_events`, `cancel_job`) via `ironclaw config set` does not prevent the agent from invoking those tools during a non-interactive agent run. The agent calls the tool, the result returns normally with no permission prompt, and the call's effect is identical to `always_allow`.
+**A proper test:** set `tool_permissions.create_job = ask_each_time`, confirm via `ironclaw config get` and note the timestamp, fire a prompt known to trigger `create_job`, then check `conversation_messages` for whether the call executed.
 
-**Empirical test:** After setting the four delegation-tool permissions to `ask_each_time` and invoking a kanban-worker agent against `MultiAgency/kanban#40` (via `ironclaw run` / single-message mode — `agent_jobs.source=direct`/`sandbox`, not via webhook routine dispatch), the agent's tool-call trace showed three successful `create_job` invocations each returning a `{job_id, browse_url}` payload. No interactive prompt fired (the headless agent has no TUI attached); no permission-denied error returned.
-
-**Mechanism (inferred from behavior):** the `tool_permissions.<tool>: ask_each_time` config is interpreted as "prompt in interactive TUI for human approval before invocation." In non-interactive channels — `direct`/`sandbox` agent runs from `ironclaw run` or single-message mode, plus (by extrapolation) cron-fired routines and http-channel routines whenever those dispatch — no human is available to prompt, and the runtime evidently treats this as auto-allow rather than auto-deny.
-
-**Implication:** the permission model does not provide a structural block for autonomous flows. Fork users who want to restrict an agent's tool palette in non-interactive contexts cannot rely on `tool_permissions`. The available alternatives:
+Two design alternatives hold regardless of how `ask_each_time` behaves:
 
 - **Don't install the tool.** Skills declare their own tool dependencies; not installing the `jobs` capability would prevent any skill from accessing it. Requires modifying the skill manifest, not just permissions.
-- **Prompt-engineer the avoidance.** Per F28, prompt-resistance is a property of the model; this is unreliable.
 - **Use a tool-call validation layer.** Wrap the agent's tool dispatch to reject calls to specific tool names. Requires IronClaw runtime modification or an external proxy.
 
-**Upstream candidate:** add a `tool_permissions.<tool>: deny` or `never_allow` value that hard-blocks the call regardless of channel context (filing as nearai/ironclaw issue is the v0.1.1+ path).
+**Upstream candidate:** add a `tool_permissions.<tool>: deny` / `never_allow` value that hard-blocks regardless of channel context (file as a nearai/ironclaw issue, v0.1.1+).
 
 ### Finding 30: Prompt/tool parameter-name mismatch silently drops the http body — model fabrication is the symptom, not the cause
 
@@ -836,7 +768,7 @@ Both the Worker prompt (line 141, `json=["in-progress"]`) and AGENTS.md's concre
 - `/Users/jlwaugh/multi/kanban/worker/src/index.ts` lines 141, 142, 158 — `json=` → `body=`
 - `/Users/jlwaugh/AGENTS.md` four concrete-shape JSON examples — `"json"` key → `"body"` key
 
-**Pattern note (cross-reference F26, F28):** This is the third substrate issue I initially blamed on `gpt-oss-120b`. F26 (placeholder leak) had a real cause in distinctive-marker absence. F28 (`create_job` preference) had a real cause in vague-prompt language. F30 (this finding) has a real cause in prompt/tool parameter-name mismatch. In each case "model is prompt-resistant" was the wrong story. **Before attributing to the model, verify the host serialization layer:** check IronClaw's tool schema, check that the prompt's parameter names match the schema, check what the tool actually received vs. what GitHub reported.
+**Pattern note (cross-reference F26, F28):** This is one of several substrate issues initially blamed on `gpt-oss-120b`. F26 (placeholder leak) has a real cause in the prompt embedding literal templates the agent must substitute into. F28 (`create_job` invocation) is not established as a model issue at all. F30 (this finding) has a real cause in a prompt/tool parameter-name mismatch. **Before attributing a failure to the model, verify the host serialization layer:** check IronClaw's tool schema, check that the prompt's parameter names match the schema, check what the tool actually received vs. what GitHub reported.
 
 **Cross-reference:** F23 (label-POST schema — superseded; the real failure was empty body, not wrong shape), F26 (placeholder leak), F28 (`create_job` delegation), F29 (`tool_permissions` headless gap).
 
