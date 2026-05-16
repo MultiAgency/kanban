@@ -691,6 +691,26 @@ Error: Serialization error: Missing field in full_job action: title
 
 **Underlying mechanism (revised 2026-05-15).** Sample inspection of 5 pre-redesign tick runs (Session 2 validation prep) showed the agent emitting literal `issue_number="N"` to `get_issue` even when the preceding `list_issues` call had returned real issues with real numbers in its output. The failure is not narrowly "placeholder content emitted into argument position" — it is "model ignores upstream tool output when the prompt template suggests an answer." The structural redesign (scalar args only, content/body in prose) targets the symptom; the mechanism may persist. First-fire post-redesign observation must verify both (a) no placeholder content in argument position AND (b) the agent uses `list_issues` output to determine `issue_number`, not the prompt's template values. Prior verified: DB-level commit reconciliation for kanban-tick alone in the same window yields 14/26, confirming the 14/27 above is effectively tick-only — webhook contributed at most ~1-3 commits within timestamp-bracket noise of the 27 denominator.
 
+**Underlying mechanism (revised 2026-05-16) — code path, not prompt design.** Session 2 source-code investigation located the failure at IronClaw's `use_planning=true` code path (`worker/job.rs:333-376`, `llm/reasoning.rs:498-530, 871-911`): the planner makes a separate LLM call asking for a complete JSON `ActionPlan` with all `parameters` filled upfront, and `execute_plan()` then runs each `PlannedAction` literally — placeholders for parameters that depend on yet-to-run tools end up as tool arguments verbatim. The SELECT_TOOLS path (`run_agentic_loop` + `select_tools` / `respond_with_tools`) is multi-turn: each iteration's LLM call sees prior tool results, so parameters can be filled from real data.
+
+**Bimodal-population correction.** Session 3 D-analysis re-measured against all 152 kanban-tick jobs (last 5 days, jobs with `job_id IS NOT NULL`) using a tight F26-marker regex over `job_actions.input`. The aggregate ~54% rate (14/26 in Session 2) was masking a bimodal mixture:
+
+- Planner path (`use_planning=true` succeeded → `Plan:` message emitted): **84 / 100 jobs leaked (84%)**.
+- SELECT_TOOLS-fallback path (planner skipped, errored, or returned malformed JSON): **0 / 52 jobs leaked (0%)**.
+- Population split: ~66 / 34 across the two paths, driven by planner-response truncation/error on the smaller fraction.
+- Weighted (0.66 × 84% + 0.34 × 0%) ≈ 55%, consistent with the 14/26 aggregate within sampling noise.
+
+The implication: F26 is not a prompt-design defect at all — every leak in the historical record traces to the planner code path. The Session 1 prompt rewrite operated on a layer the failure does not depend on. Surface-level leak shape (`[FILL: output_path]`, `<N>`, `[issue_number from step 1]`, etc.) is the symptom; the planner asking for `parameters` before any tool runs is the cause.
+
+**Session 3 A-test (2026-05-16) — flip eliminates F26; exposes a separate failure of unknown rate.** With `agent.use_planning=false` (DB settings + TOML, daemon restarted, PID 6278), kanban-tick re-enabled, two fires were observed:
+
+- Fire 1 (`routine_run 3c2d3c2b` / `job 30633dc7`, 02:35:05Z → 02:36:05Z, status=ok): clean single `list_issues` call with concrete arguments, model analyzed candidate issues against eligibility criteria, concluded "no qualifying issue", job completed successfully. No `Plan:` message → SELECT_TOOLS path confirmed. No F26 markers in any tool input.
+- Fire 2 (`routine_run 0ad39612` / `job 133ab93b`, 03:07:48Z → 11h+ stall, manually failed at 14:39:08Z): SELECT_TOOLS-path stall. Model emitted 4 redundant `list_issues` calls (varying label filters), identified Issue #38 by name in its reasoning text, then emitted a final analysis text without further tool calls; daemon never marked completion. No F26 markers in any tool input.
+
+The SELECT_TOOLS path shows variance in the model's turn-1 tool-call construction. Fire 1 emitted a tight, fully-parameterized `list_issues` call (`labels=ready,agent-eligible, limit=20, direction=asc, sort=created`) and returned 20 issues (#20–#50 range). Fire 2 emitted a looser opening call missing `limit`/`sort`/`direction` and returned 30 issues (#8–#50 range; Fire 1's 20 as a subset). Both candidate sets contained Issue #38, byte-confirmed against `job_actions.output_raw` (Fire 1: 109930 bytes; Fire 2: 159953 bytes per call; see Finding 31 for why `job_events` is not authoritative here). Both fires correctly identified #38 as disqualified by `in-progress`. The Fire-2 stall pattern is: looser opening query → 30-issue return → four redundant `list_issues` calls with varying label filters → final analysis text without a tool call → daemon never marks completion. The two fires first diverge at the turn-1 tool call. Whether turn-1 call shape causes or reliably predicts the stall is unverified at N=1; the turn-1 observation is a lead for investigation, not an established mechanism.
+
+**Finding state.** F26 (placeholder leak surface) is fixed by `use_planning=false`: 0 leaks across two A fires consistent with the 0/52 SELECT_TOOLS-path historical rate. A simultaneously exposed a SELECT_TOOLS-path silent-stall failure mode. Two fires cannot establish that mode's rate; characterizing it (rate, trigger conditions, detector affordances) is a prerequisite to any ship decision and is open research. T1.3 (repair scanner) must detect a silent blocking stall — a job that emitted tool-use events but never a completion event — which is a strictly harder detector than the deterministic placeholder-commit detector the existing `no-cruft.yml` covers. If turn-1 call shape proves a reliable precursor at higher N, T1.3 gains a turn-1-shape signal in addition to the stall-timeout signal — this is open, not established. State at end of Session 3: kanban-tick `enabled=0`, kanban-scaffold `enabled=0`, `agent.use_planning=false` in DB and TOML (not reverted), Fire 2 orphan cleared.
+
 **Out of scope here.** A separate `POST /issues/N/labels` schema-rejection symptom observed on the same fires is plausibly the `http`-tool body-serialization issue tracked in Finding 30, not a placeholder leak.
 
 ### Finding 27: IronClaw HTTP channel uses `X-Hub-Signature-256` HMAC, not a shared-secret header
@@ -773,6 +793,17 @@ Both the Worker prompt (line 141, `json=["in-progress"]`) and AGENTS.md's concre
 **Pattern note (cross-reference F26, F28):** This is one of several substrate issues initially blamed on `gpt-oss-120b`. F26 (placeholder leak) has a real cause in the prompt embedding literal templates the agent must substitute into. F28 (`create_job` invocation) is not established as a model issue at all. F30 (this finding) has a real cause in a prompt/tool parameter-name mismatch. **Before attributing a failure to the model, verify the host serialization layer:** check IronClaw's tool schema, check that the prompt's parameter names match the schema, check what the tool actually received vs. what GitHub reported.
 
 **Cross-reference:** F23 (label-POST schema — superseded; the real failure was empty body, not wrong shape), F26 (placeholder leak), F28 (`create_job` delegation), F29 (`tool_permissions` headless gap).
+
+### Finding 31: `job_events.tool_result.data` is truncated to ~573 bytes; `job_actions.output_raw` is the authoritative tool-result store
+
+IronClaw stores tool results in two places with different retention behavior:
+
+- `job_events.tool_result.data`: uniformly truncated to ~573 bytes (roughly 500 chars of content plus JSON wrapping). Used for the event stream surfaced to the dashboard and CLI.
+- `job_actions.output_raw`: the full tool result; no observed cap. Sizes of 109,930 and 159,953 bytes observed for github `list_issues` returns in the Session 3 A-test fires.
+
+For any post-hoc analysis of what a fire actually received from a tool, query `job_actions.output_raw`. The two storage layers are not interchangeable. Any forensic or detection tool — including T1.3 repair-scanner candidates — must use `job_actions` for content-level inspection beyond the truncation window. Reasoning about a fire from `job_events` alone risks inferring from a 503-char excerpt what would be a verifiable byte-comparison against `job_actions.output_raw`.
+
+Session 3 surfaced this when the candidate sets of two A-test fires were initially described as "effectively identical" based on `job_events.tool_result` excerpts; `job_actions.output_raw` showed they differed (Fire 1: 20 issues with `limit=20`; Fire 2: 30 issues with no limit). The substantive Session 3 A finding (Finding 26) was revised against the full-output data.
 
 ### Finding N: _TBD — populated as future tracer probes surface issues_
 
